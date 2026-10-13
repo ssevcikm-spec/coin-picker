@@ -3,19 +3,13 @@
 
 ## 1h. Konstanty z Godotu 3 v Godotu 4 NEEXISTUJÍ (a je to častá chyba)
 
-Model má v trénovacích datech spoustu Godotu 3 a píše jeho konstanty. Godot 4
-je přejmenoval na delší a významově jiná jména – a **parse to odhalí**:
+Model má v datech spoustu Godotu 3 a píše jeho konstanty. Godot 4 je přejmenoval
+– a **parse to odhalí**:
 
 ```
 # ŠPATNĚ – Parse Error: Cannot find member "ALIGN_LEFT" in base "Label".
 label.align = Label.ALIGN_LEFT
-label.valign = Label.VALIGN_TOP
-label.autowrap = true
-
-# SPRÁVNĚ – Godot 4
-label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+# SPRÁVNĚ – Godot 4: label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 ```
 
 | Godot 3 | Godot 4 |
@@ -25,16 +19,20 @@ label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 | `Label.align` / `Label.valign` | `Label.horizontal_alignment` / `Label.vertical_alignment` |
 | `Label.autowrap` (bool) | `Label.autowrap_mode` (`TextServer.AUTOWRAP_*`) |
 | `connect("signal", self, "_on_x")` | `signal.connect(_on_x)` |
+| `array.empty()` / `string.empty()` / `dict.empty()` | `array.is_empty()` / `string.is_empty()` / `dict.is_empty()` |
 | `yield(x, "signal")` / `yield(x, "completed")` | `await x.signal` / `await x.completed` |
 | `export var` / `onready var` | `@export var` / `@onready var` |
 | `OS.get_ticks_msec()` | `Time.get_ticks_msec()` |
 | `instance()` | `instantiate()` |
 | `PoolStringArray` a ostatní `Pool*Array` | `PackedStringArray` a ostatní `Packed*Array` |
 
+**Naměřeno 13. 10. 2026 (K4):** granule `world.spawner` (běh `Forge #249`) spadla
+na `Cannot find member "empty" in base "Array[Node]"` — model napsal
+`pole.empty()` jako v Godotu 3. Sekce se posílala, řádek v tabulce ale **nebyl**.
+
 **Naměřeno 1. 10. 2026:** granule `ui.hud` (běh #241) na tomhle spadla –
-`Cannot find member "ALIGN_LEFT" in base "Label"` na `scripts/hud.gd:8` a
-`VALIGN_TOP` na `:9`. Soubor se kvůli tomu **nikdy nedostal do repa** a HUD
-nemá stavovou lištu.
+`Cannot find member "ALIGN_LEFT" in base "Label"` na `scripts/hud.gd:8`; soubor
+se kvůli tomu **nikdy nedostal do repa**.
 
 **Pravidlo: nepoužívej konstantu, kterou jsi neviděl v tomto repu.** Když si
 nejsi jistý jménem, sáhni po tématu, které v repu UŽ JE (`scripts/level.gd`,
