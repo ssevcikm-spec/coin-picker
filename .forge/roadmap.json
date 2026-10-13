@@ -2,24 +2,58 @@
   "_popis": [
     "Fronta granul hry Coin-Picker — plán, který má orchestra dělat SAMA.",
     "",
-    "⚠ TAHLE HRA VZNIKLA JAKO PILOT (K3/K4, 12. 10. 2026): cílem je ověřit, že se",
-    "request granule VEJDE do stropu poskytovatele (Groq zdarma = 8 000 t/min).",
-    "Proto je každá granule JEDEN soubor do ~120 řádků se `size_lines`",
-    "a s DEKLAROVANÝMI sekcemi konvencí (`konvence`).",
+    "⚠ TAHLE HRA VZNIKLA JAKO PILOT (K3/K4, 12.–13. 10. 2026): cílem je ověřit, že se",
+    "request granule VEJDE do stropu poskytovatele a že granule dojde do `main` bez člověka.",
+    "Proto je každá granule JEDEN soubor se `size_lines` a s DEKLAROVANÝMI sekcemi",
+    "konvencí (`konvence`).",
     "",
-    "JAK JE PLÁN POSTAVENÝ: skeleton už je HOTOVÝ a zelený (mapa, hráč, HUD,",
-    "testy). Granule tedy přidávají FUNKCE do běžící hry — nezakládají první",
-    "soubor. To je i tvrdší test rozpočtu: u `core.wiring` se do requestu počítá",
-    "EXISTUJÍCÍ soubor (a to je ta část, která se nevejde, když je granule velká).",
+    "⚠ PŘEMĚŘENO 13. 10. 2026 (K5): STROP 8 000 t/min NENÍ VLASTNOST ORCHESTRY, JE TO",
+    "VLASTNOST GROQU. Živě naměřeno (`probe-provider.mjs`): mistral codestral-latest",
+    "625 000 t/min, cerebras gpt-oss-120b 30 000 t/min. Referenční poskytovatel téhle",
+    "roadmapy je proto MISTRAL (největší strop, v `providers.json` první v pořadí pro",
+    "granule `strong` i `any`). Brána před zápisem se pouští TAKHLE:",
+    "  node .forge/node/rozpocet-granuli.mjs --poskytovatel mistral --model codestral-latest",
+    "Kdo ji pustí na groqu (8 000 t), dostane u velkých granulí REQUEST_TOO_LARGE — a to je",
+    "SPRÁVNĚ: na 8 000 t se velká granule nevejde a groq ji NEMÁ dostat, jinak rotace",
+    "spálí pokus. Malé granule se vejdou na obojí.",
+    "",
+    "JAK JE PLÁN POSTAVENÝ: skeleton je HOTOVÝ a zelený (mapa, hráč, HUD, testy). Granule",
+    "přidávají FUNKCE do běžící hry — nezakládají první soubor. To je i tvrdší test",
+    "rozpočtu: u `core.wiring` se do requestu počítá EXISTUJÍCÍ soubor.",
     "",
     "KONTRAKTY: metoda, kterou granule přidá, musí mít PŘESNĚ to jméno, které je",
     "v zadání — testy se na něj ptají. Když se jméno změní, rozsvítí se kontrola",
     "a granule neprojde (to je záměr, ne past).",
     "",
-    "BRÁNA PŘED ZÁPISEM (K3): každá granule musí projít",
-    "  node .forge/node/rozpocet-granuli.mjs --poskytovatel groq --model openai/gpt-oss-120b",
-    "→ REQUEST_FITS. Co se nevejde, se NEPOŠLE (dřív se to poslalo a 20 běhů",
-    "dne 12. 10. 2026 selhalo na velikosti requestu)."
+    "═══ DRUHÁ VLNA (10 granulí, 13. 10. 2026) — NENÍ O GRAF, JE O TUNING ORCHESTRY ═══",
+    "Cvičí cesty, které se ještě nikdy živě nespustily, a měří hypotézu z K4:",
+    "„u 2 ze 4 granul selhal MODEL proto, že ZNALOST CHYBĚLA V ZADÁNÍ“ (F11/F13).",
+    "",
+    "  · `sim.progress` — VELKÁ granule (`size_lines` 200) s deklarovanými VŠEMI sekcemi",
+    "    konvencí (4 301 t) a delším zadáním. Test hypotézy: víc znalosti v requestu =",
+    "    míň lidských zásahů. Měří se: počet pokusů a jestli granule došla bez člověka.",
+    "  · `ui.gameover` — ZÁMĚRNÝ TEST `awaiting_human` (A1/A2): deklaruje `size_lines` 60,",
+    "    ale poctivá implementace má ~120 řádků → brána auto-merge PR pošle K RUČNÍ",
+    "    KONTROLE. Očekávaný výsledek: úkol skončí `awaiting_human` (NE `done`),",
+    "    NESPÁLÍ pokus a PR čeká na člověka. To je záměr, ne vada — cesta se jinde",
+    "    než záměrným testem spustit nedá.",
+    "  · `core.wiring2` — závisí na 5 granulích, takže se do requestu PŘIČTOU soubory",
+    "    závislostí (F5/K4: `depends_on` je i KONTEXT, ne jen pořadí). Záměrně velký",
+    "    request — na groqu se nevejde, na mistralu ano.",
+    "",
+    "  Rozdělení podle měřeného záměru:",
+    "    velká/kontext  → sim.progress (všechny sekce), core.wiring2 (5 závislostí)",
+    "    awaiting_human → ui.gameover (size_lines pod reálnou velikostí)",
+    "    rotace+cooldown→ world.portal, entity.patrol (nejsložitější smlouvy)",
+    "    jednoduché      → ui.timer, world.trap, save.best, entity.heart, world.door",
+    "                      (nesou jmenovatel metriky autonomie: kolik jich projde napoprvé)",
+    "",
+    "  CO SE NEMĚŘÍ TÍMHLE VLNOU (a je to vědomé):",
+    "    · `owns` konflikt dvou granul na jednom souboru — conductor má MAX_CONCURRENT=1,",
+    "      takže zámek souborů se při jednom běhu vůbec neuplatní (aby se cesta dala",
+    "      měřit, muselo by se zvednout MAX_CONCURRENT, a to je jiné rozhodnutí).",
+    "    · watchdog (B3a) a strop `GRAIN_MAX_RUNS=8` — spustí se jen na granulе, která",
+    "      selže 3×/8×; to se nedá naplánovat, jen pozorovat."
   ],
   "grains": [
     {
@@ -94,7 +128,7 @@
       "id": "core.wiring",
       "title": "Zapoj mince a nepřítele do scény",
       "kind": "code",
-      "prompt": "Uprav soubor, který máš v chatu (už existuje – NEPŘEPISUJ ho celý, jen doplň). Scéna staví uzly v kódu a má vyznačený ROZŠIŘOVACÍ BOD; doplň do něj dvě věci: (1) když soubor mincí existuje, vytvoř rozmisťovač přes `_vytvor_komponentu(\"res://scripts/spawner.gd\", \"Spawner\")`, přidej ho do scény a zavolej `rozmistni(4)`; (2) když soubor nepřítele existuje, vytvoř ho přes `_vytvor_komponentu(\"res://scripts/enemy.gd\", \"Enemy\")`, přidej do scény a postav ho na značku `exit` z mapy (`mapa.marker_positions(\"exit\")`; když je pole prázdné, nech ho na spawnu). ZACHOVEJ beze změny: názvy uzlů `Level`, `Player`, `Hud`, signál `sebrano` i jeho připojení, metody `_vytvor_komponentu`, `_nacti_mapu`, `_postav_hrace`, `_on_sebrano`, `_aktualizuj_listu` a vlastnost `skore`. Pro soubory, které v repu nejsou, platí: PŘESKOČ je a hra musí zůstat hratelná (aditivní migrace) – proto `_vytvor_komponentu` vrací `null` a ty na to reaguj. Nic nemaž a neměň `tests/`, `.forge/` ani `project.godot`.",
+      "prompt": "Uprav soubor, který máš v chatu (už existuje – NEPŘEPISUJ ho celý, jen doplň). Scéna staví uzly v kódu a má vyznačený ROZŠIŘOVACÍ BOD; doplň do něj dvě věci: (1) když soubor mincí existuje, vytvoř rozmisťovač přes `_vytvor_komponentu(\"res://scripts/spawner.gd\", \"Spawner\")`, přidej ho do scény a zavolej `rozmistni(4)`; (2) když soubor nepřítele existuje, vytvoř ho přes `_vytvor_komponentu(\"res://scripts/enemy.gd\", \"Enemy\")`, přidej ho do scény a postav ho na značku `exit` z mapy (`mapa.marker_positions(\"exit\")`; když je pole prázdné, nech ho na spawnu). ZACHOVEJ beze změny: názvy uzlů `Level`, `Player`, `Hud`, signál `sebrano` i jeho připojení, metody `_vytvor_komponentu`, `_nacti_mapu`, `_postav_hrace`, `_on_sebrano`, `_aktualizuj_listu` a vlastnost `skore`. Pro soubory, které v repu nejsou, platí: PŘESKOČ je a hra musí zůstat hratelná (aditivní migrace) – proto `_vytvor_komponentu` vrací `null` a ty na to reaguj. Nic nemaž a neměň `tests/`, `.forge/` ani `project.godot`.",
       "owns": [
         "scripts/game.gd"
       ],
@@ -112,6 +146,228 @@
       ],
       "done": true,
       "_done": "HOTOVO 13. 10. 2026: conductor vydal (task 250) a dokoncil SAM - beh Forge #10, vsechny tri joby success, PR #4 automaticky sloucen. Cely plan 4 granul je hotovy."
+    },
+    {
+      "id": "sim.progress",
+      "title": "Průběh hry: cíl, součet, série a násobič",
+      "_experiment": "VELKÁ GRANULE (size_lines 200) + VŠECHNY sekce konvencí (4 301 t) + delší zadání. Měří hypotézu K4: když má model v requestu víc znalosti, klesne počet lidských zásahů a pokusů. Proti tomu stojí metodický cíl „sekce <= 1200 t celkem“ — tady je ZÁMĚRNĚ překročený, proto se u téhle granule čeká VAROVÁNÍ, ne vada.",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), modul průběhu hry. SMLOUVA – přesně tyhle veřejné členy volají testy: (1) `extends Node`, žádné `class_name`, `_init()` bez povinného argumentu a nic v něm nezakládej. (2) `signal hotovo` – vyšle se ve chvíli, kdy součet POPRVÉ dosáhne cíle; `reset()` vynuluje i značku „už ohlášeno“ (aby se po resetu dalo ohlásit znovu). (3) `nastav_cil(pocet: int) -> void` – nastav cíl; když je `pocet` menší než 1, nastav 1. (4) `cil() -> int` – aktuální cíl. (5) `pridej_body(body: int) -> int` – přičti body k součtu, zvyš sérii o 1 a vrať NOVÝ součet. (6) `celkem() -> int` – součet. (7) `serie() -> int` – kolik sebraní jde po sobě. (8) `nasobic() -> int` – 1 do série 4, 2 od série 5, 3 od série 10; výš než 3 nikdy. (9) `splneno() -> bool` – součet je větší nebo roven cíli. (10) `zbyva_do_cile() -> int` – nikdy záporné číslo. (11) `reset() -> void` – součet a série na 0, cíl se NEMĚNÍ. TYPY PIŠ VÝSLOVNĚ (`var soucet: int = 0`) a `:=` použij jen tam, kde je typ zřejmý z literálu. Prázdný řetězec i pole testuj `is_empty()`, NIKDY `empty()` (Godot 3 → parse spadne). KAŽDOU proměnnou deklaruj. Vlastnosti nikdy nepojmenuj `position`, `name`, `scale`, `visible` ani `owner`. Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/progress.gd"
+      ],
+      "depends_on": [],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 200,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "02-reservovana-jmena",
+        "03-kolize-clenu",
+        "04-soubory-json",
+        "05-godot3-konstanty",
+        "06-soubor-granule",
+        "07-uzel-a-kostra",
+        "08-meze-a-overeni",
+        "09-architektura-hry"
+      ]
+    },
+    {
+      "id": "ui.timer",
+      "title": "Odpočet, který jde tiknout ručně",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), odpočet. SMLOUVA – přesně tyhle veřejné členy volají testy: (1) `extends Node`, žádné `class_name`, `_init()` bez povinného argumentu. (2) `signal vyprsel` – vyšle se PRÁVĚ JEDNOU ve chvíli, kdy odpočet dojde na nulu. (3) `var zbyva_sekund: float = 0.0`. (4) `nastav(sekundy: int) -> void` – nastav odpočet; když je `sekundy` menší než 1, nastav 1; značku „už vypršelo“ vynuluj. (5) `tik(delta: float) -> void` – odečti `delta` a NIKDY nespadni pod nulu; když odpočet dojde na nulu, vyšli `vyprsel`. (6) `zbyva() -> int` – kolik sekund ZBÝVÁ, zaokrouhleno NAHORU (funkce `ceili`), tedy 2.0 → 2, 1.0 → 1, 0.4 → 1, 0.0 → 0. (7) `bezi() -> bool` – `zbyva_sekund > 0`. NEPOUŽÍVEJ `extends Timer` ani `_process` – čas dodává JEN `tik(delta)`, aby se odpočet dal testovat bez čekání. TYPY PIŠ VÝSLOVNĚ, prázdné hodnoty testuj `is_empty()`, NIKDY `empty()`. Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/timer.gd"
+      ],
+      "depends_on": [],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 70,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "05-godot3-konstanty"
+      ]
+    },
+    {
+      "id": "world.trap",
+      "title": "Past, která ubere hráči hp (s cooldownem)",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), past (ostny). SMLOUVA – přesně tyhle členy volají testy: (1) `extends Area2D`, žádné `class_name`, `_init()` bez argumentu; `poskozeni`, `obnovit_sekundy` a `cekani` deklaruj V TOMHLE skriptu. (2) `var poskozeni: int = 1`, `var obnovit_sekundy: float = 2.0`, `var cekani: float = 0.0`. (3) V `_ready()` se přidej do skupiny `trap`, nastav `monitoring = true` a postav kolizní tvar (uzel CollisionShape2D s CircleShape2D, poloměr 8). (4) `poskod(cel: Node) -> bool` – když je `cekani` větší než 0, vrať `false` a nic neměň; když cíl NEMÁ vlastnost `hp` (testuj `\"hp\" in cel`), vrať `false`; jinak uber `cel.hp` o `poskozeni` (nikdy pod nulu), nastav `cekani = obnovit_sekundy` a vrať `true`. (5) `tik(delta: float) -> void` – sniž `cekani` o `delta`, nikdy pod nulu. (6) `obnovit() -> void` – nastav `cekani = 0.0`. (7) `_on_body_entered(body: Node) -> void` – když je `body` ve skupině `player`, zavolej `poskod(body)`. DŮLEŽITÉ – SIGNÁL PŘIPOJUJ SYNTAXÍ GODOTU 4: `body_entered.connect(_on_body_entered)`, NIKDY `connect(\"body_entered\", self, \"...\")` (Godot 3 → parse spadne). KAŽDOU proměnnou deklaruj (`var tvar: CollisionShape2D = CollisionShape2D.new()`). Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/trap.gd"
+      ],
+      "depends_on": [],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 90,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "05-godot3-konstanty"
+      ]
+    },
+    {
+      "id": "save.best",
+      "title": "Nejlepší skóre v user:// (JSON)",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), evidenci nejlepšího skóre. SMLOUVA – přesně tyhle členy volají testy: (1) `extends Node`, žádné `class_name`, `_init()` bez povinného argumentu. (2) `uloz(cesta: String, skore: int) -> bool` – přečti dosavadní rekord a když je `skore` VĚTŠÍ, zapiš ho a vrať `true`; když je menší nebo stejné, nic nepiš a vrať `false`. (3) `nejlepsi(cesta: String) -> int` – přečti rekord; když soubor neexistuje, je prázdný nebo v něm není číslo, vrať 0 a NIKDY nespadni. (4) Soubor je JSON objekt s klíčem `skore`. ČTI I PIŠ PŘES `FileAccess` a `JSON.parse_string` / `JSON.stringify` – NIKDY přes `File` ani `JSON.parse` (to je Godot 3). Zápis dělej přes `FileAccess.open(cesta, FileAccess.WRITE)`. (5) `cesta` je PARAMETR – testy si podávají `user://best_test.json`; žádnou cestu neměj zapečenou v kódu. Prázdný řetězec testuj `is_empty()`, NIKDY `empty()`. TYPY PIŠ VÝSLOVNĚ. Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/best.gd"
+      ],
+      "depends_on": [],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 70,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "04-soubory-json"
+      ]
+    },
+    {
+      "id": "entity.heart",
+      "title": "Sbíratelné srdce (léčení)",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), sbíratelné srdce. SMLOUVA – přesně tyhle členy volají testy: (1) `extends Area2D`, žádné `class_name`, `_init()` bez argumentu; `vypln` deklaruj V TOMHLE skriptu (do holého `Area2D.new()` vlastnost přidat nejde). (2) V `_ready()` se přidej do skupiny `heart`, nastav `monitoring = true` a postav kolizní tvar (uzel CollisionShape2D s CircleShape2D, poloměr 6). (3) `var vypln: int = 1`. (4) `hodnota_leceni() -> int` – vrátí `vypln`. (5) `seber(hrac: Node) -> bool` – když hráč NEMÁ `hp`, nebo je srdce už sebrané, vrať `false` a nic neměň; jinak zvyš `hrac.hp` o `vypln` (NIKDY nad `hrac.max_hp`, když tu vlastnost má), označ srdce za sebrané, zavolej `queue_free()` a vrať `true`. (6) `_on_body_entered(body: Node) -> void` – když je `body` ve skupině `player`, zavolej `seber(body)`. DŮLEŽITÉ – SIGNÁL PŘIPOJUJ SYNTAXÍ GODOTU 4: `body_entered.connect(_on_body_entered)`, NIKDY `connect(\"body_entered\", self, \"...\")` (Godot 3 → parse spadne). KAŽDOU proměnnou deklaruj. Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/heart.gd"
+      ],
+      "depends_on": [],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 80,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "05-godot3-konstanty"
+      ]
+    },
+    {
+      "id": "world.door",
+      "title": "Dveře, které se dají odemknout",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), dveře. SMLOUVA – přesně tyhle členy volají testy: (1) `extends Area2D`, žádné `class_name`, `_init()` bez argumentu; `odemcene` deklaruj V TOMHLE skriptu. (2) `signal proslo` – vyšle se, když hráč projde ODEMČENÝMI dveřmi. (3) V `_ready()` se přidej do skupiny `door`, nastav `monitoring = true` a postav kolizní tvar (uzel CollisionShape2D s RectangleShape2D, velikost `Vector2(24, 24)`). (4) `var odemcene: bool = false`. (5) `odemkni() -> void` – nastav `odemcene = true`. (6) `je_odemcena() -> bool`. (7) `projit(hrac: Node) -> bool` – když dveře NEJSOU odemčené, vrať `false` a nic neměň; jinak vyšli `proslo` a vrať `true`. (8) `_on_body_entered(body: Node) -> void` – když je `body` ve skupině `player`, zavolej `projit(body)`. DŮLEŽITÉ – SIGNÁL PŘIPOJUJ SYNTAXÍ GODOTU 4: `body_entered.connect(_on_body_entered)`, NIKDY `connect(\"body_entered\", self, \"...\")` (Godot 3 → parse spadne). KAŽDOU proměnnou deklaruj. Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/door.gd"
+      ],
+      "depends_on": [],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 80,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "05-godot3-konstanty"
+      ]
+    },
+    {
+      "id": "world.portal",
+      "title": "Portál, který přenese hráče na značku",
+      "_experiment": "NEJSLOŽITĚJŠÍ SMLOUVA VLNY (Area2D + signál + dotaz na mapu až v čase volání). Cílem je vyvolat přirozený neúspěch → K2 rotace poskytovatele a cooldown `RETRY_HOURS`; to jsou cesty, které se živě ještě nespustily.",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), portál. SMLOUVA – přesně tyhle členy volají testy: (1) `extends Area2D`, žádné `class_name`, `_init()` bez argumentu; `cil` deklaruj V TOMHLE skriptu. (2) V `_ready()` se přidej do skupiny `portal`, nastav `monitoring = true` a postav kolizní tvar (uzel CollisionShape2D s CircleShape2D, poloměr 8). (3) `var cil: String = \"exit\"`. (4) `nastav_cil(jmeno: String) -> void` – uloží značku. (5) `znacka() -> String` – vrátí uloženou značku. (6) `prenes(hrac: Node) -> bool` – uzel mapy hledej AŽ TADY, přes `get_tree().get_first_node_in_group(\"level\")`; NIKDY v `_init()`, tam uzel ještě není ve stromu a `get_tree()` je null. Když mapa není, nebo `marker_positions(cil)` vrátí prázdné pole, vrať `false` a hráče nech být; jinak nastav `hrac.position` na PRVNÍ pozici z pole a vrať `true`. (7) `_on_body_entered(body: Node) -> void` – když je `body` ve skupině `player`, zavolej `prenes(body)`. DŮLEŽITÉ – SIGNÁL PŘIPOJUJ SYNTAXÍ GODOTU 4: `body_entered.connect(_on_body_entered)`, NIKDY `connect(\"body_entered\", self, \"...\")`. PRÁZDNÉ POLE TESTUJ `is_empty()`, NIKDY `empty()` (Godot 3). TYPY PIŠ VÝSLOVNĚ (`var pozice: Array = ...`), KAŽDOU proměnnou deklaruj. Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/portal.gd"
+      ],
+      "depends_on": [],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 90,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "05-godot3-konstanty"
+      ]
+    },
+    {
+      "id": "entity.patrol",
+      "title": "Hlídka, která obchází zadané body",
+      "_experiment": "Druhá nejsložitější smlouva (pole Vector2, ořez kroku, cyklické přepínání). Spolu s `world.portal` nese test rotace a cooldownu.",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), hlídku, která obchází zadané body. SMLOUVA – přesně tyhle členy volají testy: (1) `extends Node2D`, žádné `class_name`, `_init()` bez argumentu. (2) `var rychlost: float = 60.0`, `var body: Array = []`, `var index: int = 0`. (3) `nastav_body(seznam: Array) -> void` – ulož POUZE položky typu `Vector2` (ostatní přeskoč) a `index` nastav na 0. (4) `pocet_bodu() -> int`. (5) `dalsi_bod() -> Vector2` – aktuální cílový bod; když body nejsou, vrať `Vector2.ZERO`. (6) `tik(delta: float) -> void` – když body nejsou, nic nedělej; jinak se posuň k `dalsi_bod()` o `rychlost * delta`, ale NIKDY PŘES CÍL (krok ořízni na zbývající vzdálenost); když je po posunu vzdálenost k cíli menší než 1 px, přepni `index` na další bod CYKLICKY (z posledního zpět na první). PRÁZDNÉ POLE TESTUJ `is_empty()`, NIKDY `empty()` (Godot 3 → parse spadne). TYPY PIŠ VÝSLOVNĚ (`var cil: Vector2 = dalsi_bod()`), `:=` jen u literálu. KAŽDOU proměnnou deklaruj. Vlastnosti nikdy nepojmenuj `name`, `scale`, `visible` ani `owner` (`position` použít MUSÍŠ – hlídka se hýbe). Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/patrol.gd"
+      ],
+      "depends_on": [],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 90,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "05-godot3-konstanty"
+      ]
+    },
+    {
+      "id": "ui.gameover",
+      "title": "Obrazovka konce hry",
+      "_experiment": "ZÁMĚRNÝ TEST `awaiting_human` (A1/A2): `size_lines` je 60, takže conductor pošle do auto-merge `max_lines: 60` — ale poctivá implementace (stav + text pro výhru/prohru + restart) má ~120 řádků. Očekává se, že brána auto-merge PR POŠLE K RUČNÍ KONTROLE, úkol skončí `awaiting_human` (NE `done`) a NESPÁLÍ pokus. PR pak čeká na člověka — to je ZÁMĚR, ne vada.",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), obrazovku konce hry. SMLOUVA – přesně tyhle členy volají testy: (1) `extends Node`, žádné `class_name`, `_init()` bez argumentu. (2) `signal restart_pozadan` – vyšle se, když hráč chce hrát znovu. (3) `nastav(vyhral: bool) -> void` – uloží výsledek a sestaví text zprávy. (4) `je_vyhra() -> bool`. (5) `text_zpravy() -> String` – NEPRÁZDNÝ text pro hráče, ČESKY; text pro výhru a pro prohru se MUSÍ lišit. (6) `restart() -> void` – vyšle `restart_pozadan`. (7) `var vyhral: bool = false`, `var zprava: String = \"\"`. TYPY PIŠ VÝSLOVNĚ. Prázdný řetězec testuj `is_empty()`, NIKDY `empty()` (Godot 3 → parse spadne). Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/gameover.gd"
+      ],
+      "depends_on": [
+        "save.best"
+      ],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 60,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "05-godot3-konstanty"
+      ]
+    },
+    {
+      "id": "core.wiring2",
+      "title": "Zapoj druhou vlnu komponent do scény",
+      "_experiment": "ZÁVISÍ NA 5 GRANULÍCH: do requestu se přičtou soubory závislostí (F5/K4 — `depends_on` je i KONTEXT). Request je proto ZÁMĚRNĚ velký: na mistralu (625 000 t) se vejde, na groqu (8 000 t) NE — a to je ten rozdíl, kvůli kterému se rozpočet přeměřoval.",
+      "kind": "code",
+      "prompt": "Uprav soubor, který máš v chatu (`scripts/game.gd` – už existuje, NEPŘEPISUJ ho celý, jen doplň). Přidej metodu `_zapoj_nove_komponenty() -> void` a ZAVOLEJ ji na KONCI `_ready()` (za stávajícím rozšiřovacím bodem). Metoda pro každou z těchhle komponent udělá: když soubor v repu JE, vytvoř uzel přes `_vytvor_komponentu(cesta, jmeno)` a přidej ho `add_child`. Dvojice cesta → JMÉNO UZLU (na jméně záleží, testy se na ně ptají): `res://scripts/progress.gd` → `Progress`, `res://scripts/timer.gd` → `Timer`, `res://scripts/patrol.gd` → `Patrol`, `res://scripts/portal.gd` → `Portal`, `res://scripts/door.gd` → `Door`, `res://scripts/heart.gd` → `Heart`. Uzly `Portal` a `Door` postav na značku `exit` z mapy (`mapa.marker_positions(\"exit\")`), když je pole prázdné, nech je na spawnu; ostatní nech na spawnu. Soubory, které v repu NEJSOU, PŘESKOČ – hra musí zůstat hratelná (aditivní migrace). ZACHOVEJ beze změny: názvy uzlů `Level`, `Player`, `Hud`, signál `sebrano` i jeho připojení, metody `_vytvor_komponentu`, `_nacti_mapu`, `_postav_hrace`, `_on_sebrano`, `_aktualizuj_listu` a vlastnost `skore`. Nic nemaž a neměň `tests/`, `.forge/` ani `project.godot`.",
+      "owns": [
+        "scripts/game.gd"
+      ],
+      "depends_on": [
+        "sim.progress",
+        "ui.timer",
+        "entity.patrol",
+        "world.portal",
+        "world.door"
+      ],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 120,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "06-soubor-granule",
+        "07-uzel-a-kostra",
+        "08-meze-a-overeni"
+      ]
     }
   ]
 }
