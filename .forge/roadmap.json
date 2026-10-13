@@ -26,7 +26,7 @@
       "id": "world.coin",
       "title": "Mince, kterou hráč sebere",
       "kind": "code",
-      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), třídu mince pro hru Coin-Picker. SMLOUVA – přesně tyhle veřejné členy volá scéna, rozmisťovač a testy: (1) soubor začni `extends Area2D`, `_init()` bez povinného argumentu; v `_ready()` se přidej do skupiny `coin`, nastav `monitoring = true`, postav si kolizní tvar (uzel CollisionShape2D s CircleShape2D, poloměr 6) a připoj signál `body_entered` na vlastní metodu `_on_body_entered`. (2) `var hodnota: int = 1` – kolik bodů mince dá. (3) `hodnota_body() -> int` – vrátí `hodnota`. (4) `seber(hrac: Node) -> bool` – přičte hráči body přes `hrac.pridej_skore(hodnota)`, zavolá `queue_free()` a vrátí `true`; když už je mince sebraná, vrátí `false` a nic nemění. (5) `_on_body_entered(body) -> void` – když je `body` ve skupině `player`, zavolej `seber(body)`. Uzel se staví z kódu přes `Area2D.new()`, proto vlastnost `hodnota` MUSÍ být deklarovaná v tomhle skriptu (do holého `Area2D.new()` vlastnost přidat nejde). Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž, soubor vzniká teď.",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), třídu mince. SMLOUVA – přesně tyhle členy volají testy: (1) `extends Area2D`, žádné `class_name`, `_init()` bez povinného argumentu; vlastnost `hodnota` deklaruj V TOMHLE skriptu (do holého `Area2D.new()` vlastnost přidat nejde). (2) V `_ready()` se přidej do skupiny `coin`, nastav `monitoring = true`, postav kolizní tvar (uzel CollisionShape2D s CircleShape2D, poloměr 6). (3) `var hodnota: int = 1`. (4) `hodnota_body() -> int` – vrátí `hodnota`. (5) `seber(hrac: Node) -> bool` – přičte hráči body přes `hrac.pridej_skore(hodnota)`, zavolá `queue_free()` a vrátí `true`; když už je sebraná, vrátí `false` a nic nemění. (6) `_on_body_entered(body) -> void` – když je `body` ve skupině `player`, zavolej `seber(body)`. DŮLEŽITÉ – SIGNÁL PŘIPOJUJ SYNTAXÍ GODOTU 4: `body_entered.connect(_on_body_entered)`. NIKDY `connect(\"body_entered\", self, \"_on_body_entered\")` – to je Godot 3, parse skriptu spadne (naměřeno 13. 10. 2026, běh #1 této hry). Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž, soubor vzniká teď.",
       "owns": [
         "scripts/coin.gd"
       ],
@@ -38,15 +38,15 @@
       "size_lines": 70,
       "model": "strong",
       "konvence": [
-        "06-soubor-granule",
-        "07-uzel-a-kostra"
+        "01-typy",
+        "05-godot3-konstanty"
       ]
     },
     {
       "id": "entity.enemy",
       "title": "Nepřítel, který jde po mapě a dá se zabít",
       "kind": "code",
-      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), třídu nepřítele. SMLOUVA – přesně tyhle veřejné členy volá scéna a testy: (1) soubor začni `extends Area2D`, `_init()` bez povinného argumentu; v `_ready()` se přidej do skupiny `enemy`, nastav `monitoring = true`, postav kolizní tvar (CircleShape2D, poloměr 8) a připoj signál `body_entered` na `_on_body_entered`. (2) `var hp: int = 2`, `var max_hp: int = 2`, `var rychlost: float = 40.0`. (3) `poskod(body: int) -> bool` – ubere `hp`, nikdy pod nulu; vrátí `true`, dokud nepřítel žije, a `false` ve chvíli, kdy umřel (tehdy zavolej `queue_free()`). (4) `je_zivy() -> bool` – `hp > 0`. (5) `_on_body_entered(body) -> void` – když je `body` ve skupině `player`, uber hráči `hp` o 1 přes `body.hp = body.hp - 1` (nic víc, hráč si smrt řeší sám). (6) `_physics_process(delta: float) -> void` – jdi konstantní rychlostí doprava a kudy se dá chodit, se PTEJ uzlu ve skupině `level` přes `is_walkable_at`; když cesta není průchozí, otoč směr. Uzel se staví z kódu přes `Area2D.new()`, takže vlastnosti (`hp`, `rychlost`) MUSÍ být v tomhle skriptu. Vlastnosti nikdy nepojmenuj `position`, `name`, `scale`, `visible` ani `owner`. Nic nemaž, soubor vzniká teď.",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), třídu nepřítele. SMLOUVA – přesně tyhle členy volají testy: (1) `extends Area2D`, žádné `class_name`, `_init()` bez argumentů; `hp` i `rychlost` deklaruj v tomhle skriptu. (2) V `_ready()` se přidej do skupiny `enemy`, nastav `monitoring = true`, postav kolizní tvar (CircleShape2D, poloměr 8). (3) `var hp: int = 2`, `var max_hp: int = 2`, `var rychlost: float = 40.0`. (4) `poskod(body: int) -> bool` – ubere `hp`, nikdy pod nulu; vrátí `true`, dokud žije, a `false`, když umřel (pak `queue_free()`). (5) `je_zivy() -> bool` – `hp > 0`. (6) `_on_body_entered(body) -> void` – když je `body` ve skupině `player`, uber hráči `hp` o 1 (`body.hp = body.hp - 1`). (7) `_physics_process(delta)` – jdi doprava rychlostí `rychlost`; kudy se dá chodit, se ptej uzlu ve skupině `level` (`is_walkable_at`); když to nejde, otoč směr. DŮLEŽITÉ – SIGNÁL PŘIPOJUJ SYNTAXÍ GODOTU 4: `body_entered.connect(_on_body_entered)`, NIKDY `connect(\"body_entered\", self, \"...\")` (Godot 3 → parse spadne; naměřeno 13. 10. 2026). Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž.",
       "owns": [
         "scripts/enemy.gd"
       ],
@@ -59,7 +59,7 @@
       "model": "strong",
       "konvence": [
         "01-typy",
-        "03-kolize-clenu"
+        "05-godot3-konstanty"
       ]
     },
     {
