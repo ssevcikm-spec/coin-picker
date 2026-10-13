@@ -1,0 +1,85 @@
+{
+  "_popis": [
+    "Vizuální profil HRY – co má vision kontrolovat a jak přísně.",
+    "",
+    "POZOR – TENHLE SOUBOR JE ŠABLONA. Co je v ní, dostane KAŽDÁ nová hra,",
+    "takže tu NESMÍ být nic, co platí jen pro jednu z nich. Do 1. 10. 2026 tu",
+    "bylo natvrdo \"hra\": \"uo-shadows\" a popis UO stylu – každá nová hra je",
+    "zdědila a profil pak lhal o tom, na co se dívá.",
+    "",
+    "CO JE OBECNÉ (patří sem – je to o KONTROLE, ne o hře):",
+    "  verze, poskytovatele, self_consistency, cache, stropy, ocekavany_obsah, mapa",
+    "",
+    "CO JE KONKRÉTNÍ (patří DO HRY, ne sem):",
+    "  hra              – název TÉTO hry; musí odpovídat `game_id` v registru.",
+    "  popis_stylu      – čím ta hra JE (izometrie? pixel art? 16 barev?).",
+    "  zakazy_v_promptu – co u TÉ hry nemá smysl hodnotit.",
+    "",
+    "KDY SE NASTAVÍ: když orchestra začne na hře pracovat (`POST /game`).",
+    "Profil je per-game proto, že ne každá hra je izometrická – velikost dlaždice,",
+    "projekci ani viewport tu proto NEHLEDEJ; ty se čtou z `assets/spec.json`.",
+    "",
+    "ZDROJ PRAVDY O SCHÉMATU JE VŽDY spec.json. Když si hra odporuje (spec tvrdí",
+    "izometrii a level.gd kreslí čtvercově), pozná to `.forge/check-schema.py`",
+    "(tvrdá brána, běží v CI PŘED vision) – a vision nemá smysl spouštět, dokud",
+    "to není srovnané."
+  ],
+
+  "verze": 1,
+
+  "hra": "coin-picker",
+  "_hra": "DOPLŇ NÁZEV TÉTO HRY (= `game_id` v registru orchestra). `vision.mjs` hodnotu nečte (je to dokumentace a klíč pro lidi), ale nesmí tu zůstat cizí jméno – naměřeno 1. 10. 2026: v šabloně bylo `uo-shadows` a dědila ho každá nová hra.",
+
+  "ocekavany_obsah": "z_mapy",
+  "_ocekavany_obsah": "`z_mapy` = obsah se spočítá z `mapa` (doporučeno; když se mapa změní, kontrola se změní s ní). Nebo vlastní seznam očekávaných věcí.",
+
+  "mapa": "assets/levels/main.json",
+  "_mapa": "Odkud se bere očekávaný obsah scény. Musí to být mapa TÉTO hry.",
+
+  "popis_stylu": "2D top-down (pohled shora), dlaždice 32x32, ploché barvy, žádná izometrie. Grafika je zatím PLACEHOLDER vygenerovaná kódem (tools/make-assets.py) – nehodnoť uměleckou kvalitu, jen to, že je na scéně to, co má být podle mapy.",
+  "_popis_stylu": "DOPLŇ: čím je TATO hra vizuálně. Např. „izometrická 2.5D, předrenderovaný 3D do 2D, realistické světlo; NE pixel art“. Když zůstane prázdný, vezme se `styl._popis` z `assets/spec.json`; když není ani to, jde modelu prázdný styl (nic nespadne).",
+
+  "zakazy_v_promptu": [
+    "Nedoporučuj stylové změny; porovnávej jen s tím, co je vidět."
+  ],
+  "_zakazy": "DOPLŇ, co u TÉTO hry nemá smysl hodnotit. Obecný zákaz výš platí pro všechny; hra přidá svoje (např. „Nehodnoť počet barev – spec kvantizaci zapovídá.“).",
+
+  "poskytovatele": [
+    {
+      "nazev": "deepseek",
+      "keyEnv": "DEEPSEEK_API_KEY",
+      "url": "https://api.deepseek.com/chat/completions",
+      "model": "deepseek-flash",
+      "role": "worker",
+      "_role": "Rutinní kontroly přítomnosti obsahu. ~384 tokenů za obrázek → ~$0,0001, tedy 20–50× levnější než konkurence."
+    },
+    {
+      "nazev": "gemini",
+      "keyEnv": "GEMINI_API_KEY",
+      "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      "model": "gemini-3.8-flash",
+      "role": "judge",
+      "_role": "Styl, diff proti baseline a sporné případy. Free kvóta je malá (~20 dotazů/model/den), proto se neplýtvá na rutinu."
+    }
+  ],
+  "_poskytovatele": "Zkouší se popořadě, první kdo odpoví vyhrává. `role` je dnes jen dokumentace – `vision.mjs` ji nečte (řetěz je obyčejný fallback).",
+
+  "strict_poskytovatele": false,
+  "_strict_poskytovatele": "true = použij POUZE poskytovatele z tohoto profilu (nedoplňuj z `providers.json`). Výchozí false = profil je první, zbytek se přidá jako záloha.",
+
+  "self_consistency": true,
+  "_self_consistency": "Dva běhy týmž modelem a porovnání. Neshoda = nejistota k rozhodnutí, ne chyba nástroje.",
+
+  "cache": {
+    "zapis": false,
+    "_zapis": "Zapisovat verdikty do .forge/vision/verdicts.jsonl. V CI to nejde (runner je čistý), smysl to má na uzlu a v session.",
+    "preskocit_schvalene": true,
+    "_preskocit": "Co je v baseline.json se znovu nekontroluje."
+  },
+
+  "stropy": {
+    "volani_na_den": 200,
+    "kol_na_granuli": 3,
+    "_kol": "Po třech kolech eskaluj (u této hry zatím jen notifikace). Každé kolo stojí čas, ne jen kvótu."
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "_popis": [
+    "Fronta granul hry Coin-Picker — plán, který má orchestra dělat SAMA.",
+    "",
+    "⚠ TAHLE HRA VZNIKLA JAKO PILOT (K3/K4, 12. 10. 2026): cílem je ověřit, že se",
+    "request granule VEJDE do stropu poskytovatele (Groq zdarma = 8 000 t/min).",
+    "Proto je každá granule JEDEN soubor do ~120 řádků se `size_lines`",
+    "a s DEKLAROVANÝMI sekcemi konvencí (`konvence`).",
+    "",
+    "JAK JE PLÁN POSTAVENÝ: skeleton už je HOTOVÝ a zelený (mapa, hráč, HUD,",
+    "testy). Granule tedy přidávají FUNKCE do běžící hry — nezakládají první",
+    "soubor. To je i tvrdší test rozpočtu: u `core.wiring` se do requestu počítá",
+    "EXISTUJÍCÍ soubor (a to je ta část, která se nevejde, když je granule velká).",
+    "",
+    "KONTRAKTY: metoda, kterou granule přidá, musí mít PŘESNĚ to jméno, které je",
+    "v zadání — testy se na něj ptají. Když se jméno změní, rozsvítí se kontrola",
+    "a granule neprojde (to je záměr, ne past).",
+    "",
+    "BRÁNA PŘED ZÁPISEM (K3): každá granule musí projít",
+    "  node .forge/node/rozpocet-granuli.mjs --poskytovatel groq --model openai/gpt-oss-120b",
+    "→ REQUEST_FITS. Co se nevejde, se NEPOŠLE (dřív se to poslalo a 20 běhů",
+    "dne 12. 10. 2026 selhalo na velikosti requestu)."
+  ],
+  "grains": [
+    {
+      "id": "world.coin",
+      "title": "Mince, kterou hráč sebere",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), třídu mince pro hru Coin-Picker. SMLOUVA – přesně tyhle veřejné členy volá scéna, rozmisťovač a testy: (1) soubor začni `extends Area2D`, `_init()` bez povinného argumentu; v `_ready()` se přidej do skupiny `coin`, nastav `monitoring = true`, postav si kolizní tvar (uzel CollisionShape2D s CircleShape2D, poloměr 6) a připoj signál `body_entered` na vlastní metodu `_on_body_entered`. (2) `var hodnota: int = 1` – kolik bodů mince dá. (3) `hodnota_body() -> int` – vrátí `hodnota`. (4) `seber(hrac: Node) -> bool` – přičte hráči body přes `hrac.pridej_skore(hodnota)`, zavolá `queue_free()` a vrátí `true`; když už je mince sebraná, vrátí `false` a nic nemění. (5) `_on_body_entered(body) -> void` – když je `body` ve skupině `player`, zavolej `seber(body)`. Uzel se staví z kódu přes `Area2D.new()`, proto vlastnost `hodnota` MUSÍ být deklarovaná v tomhle skriptu (do holého `Area2D.new()` vlastnost přidat nejde). Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/coin.gd"
+      ],
+      "depends_on": [],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 70,
+      "model": "strong",
+      "konvence": [
+        "06-soubor-granule",
+        "07-uzel-a-kostra"
+      ]
+    },
+    {
+      "id": "entity.enemy",
+      "title": "Nepřítel, který jde po mapě a dá se zabít",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), třídu nepřítele. SMLOUVA – přesně tyhle veřejné členy volá scéna a testy: (1) soubor začni `extends Area2D`, `_init()` bez povinného argumentu; v `_ready()` se přidej do skupiny `enemy`, nastav `monitoring = true`, postav kolizní tvar (CircleShape2D, poloměr 8) a připoj signál `body_entered` na `_on_body_entered`. (2) `var hp: int = 2`, `var max_hp: int = 2`, `var rychlost: float = 40.0`. (3) `poskod(body: int) -> bool` – ubere `hp`, nikdy pod nulu; vrátí `true`, dokud nepřítel žije, a `false` ve chvíli, kdy umřel (tehdy zavolej `queue_free()`). (4) `je_zivy() -> bool` – `hp > 0`. (5) `_on_body_entered(body) -> void` – když je `body` ve skupině `player`, uber hráči `hp` o 1 přes `body.hp = body.hp - 1` (nic víc, hráč si smrt řeší sám). (6) `_physics_process(delta: float) -> void` – jdi konstantní rychlostí doprava a kudy se dá chodit, se PTEJ uzlu ve skupině `level` přes `is_walkable_at`; když cesta není průchozí, otoč směr. Uzel se staví z kódu přes `Area2D.new()`, takže vlastnosti (`hp`, `rychlost`) MUSÍ být v tomhle skriptu. Vlastnosti nikdy nepojmenuj `position`, `name`, `scale`, `visible` ani `owner`. Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/enemy.gd"
+      ],
+      "depends_on": [],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 90,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "03-kolize-clenu"
+      ]
+    },
+    {
+      "id": "world.spawner",
+      "title": "Rozmisťovač mincí po mapě",
+      "kind": "code",
+      "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), rozmisťovač mincí. SMLOUVA – přesně tyhle veřejné členy volá scéna a testy: (1) soubor začni `extends Node`, `_init()` bez povinného argumentu. (2) `rozmistni(pocet: int) -> Array` – vytvoř `pocet` mincí a přidej je jako SVÉ POTOMKY (`add_child`), pak vrať pole jejich pozic (Vector2). Když `pocet` chybí nebo je menší než 1, vrať prázdné pole a nic neměň. (3) Mince vytvářej takto: `var mince: Area2D = Area2D.new()` a vlastnosti jí dej přes `mince.set_script(load(\"res://scripts/coin.gd\"))` – do holého `Area2D.new()` vlastnost přidat nejde. (4) Pozice ber z MAPY: uzel ve skupině `level` umí `walkable_cells()` (vrací pole Vector2i) a `cell_center(cx, cy) -> Vector2`; vybírej průchozí políčka ROVNOMĚRNĚ (každé k-té), nikdy náhodně, aby mince neskončila ve zdi. (5) `pocet_minci() -> int` – kolik mincí rozmisťovač vytvořil. Když uzel `level` ve scéně není, vrať prázdné pole. Vlastnosti nikdy nepojmenuj `position`, `name` ani `owner`. Nic nemaž, soubor vzniká teď.",
+      "owns": [
+        "scripts/spawner.gd"
+      ],
+      "depends_on": [
+        "world.coin"
+      ],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 100,
+      "model": "strong",
+      "konvence": [
+        "01-typy",
+        "07-uzel-a-kostra"
+      ]
+    },
+    {
+      "id": "core.wiring",
+      "title": "Zapoj mince a nepřítele do scény",
+      "kind": "code",
+      "prompt": "Uprav soubor, který máš v chatu (už existuje – NEPŘEPISUJ ho celý, jen doplň). Scéna staví uzly v kódu a má vyznačený ROZŠIŘOVACÍ BOD; doplň do něj dvě věci: (1) když soubor mincí existuje, vytvoř rozmisťovač přes `_vytvor_komponentu(\"res://scripts/spawner.gd\", \"Spawner\")`, přidej ho do scény a zavolej `rozmistni(4)`; (2) když soubor nepřítele existuje, vytvoř ho přes `_vytvor_komponentu(\"res://scripts/enemy.gd\", \"Enemy\")`, přidej do scény a postav ho na značku `exit` z mapy (`mapa.marker_positions(\"exit\")`; když je pole prázdné, nech ho na spawnu). ZACHOVEJ beze změny: názvy uzlů `Level`, `Player`, `Hud`, signál `sebrano` i jeho připojení, metody `_vytvor_komponentu`, `_nacti_mapu`, `_postav_hrace`, `_on_sebrano`, `_aktualizuj_listu` a vlastnost `skore`. Pro soubory, které v repu nejsou, platí: PŘESKOČ je a hra musí zůstat hratelná (aditivní migrace) – proto `_vytvor_komponentu` vrací `null` a ty na to reaguj. Nic nemaž a neměň `tests/`, `.forge/` ani `project.godot`.",
+      "owns": [
+        "scripts/game.gd"
+      ],
+      "depends_on": [
+        "world.spawner"
+      ],
+      "acceptance": [
+        "tests",
+        "wiring"
+      ],
+      "size_lines": 120,
+      "model": "strong",
+      "konvence": [
+        "08-meze-a-overeni"
+      ]
+    }
+  ]
+}

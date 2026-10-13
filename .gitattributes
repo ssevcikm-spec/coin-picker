@@ -1,0 +1,33 @@
+# Konec řádků – tohle není kosmetika, ale funkčnost.
+#
+# Shell skripty MUSÍ být v repu s LF. Když je git uloží s CRLF (což na Windows
+# dělá sám od sebe), Linux runner je nespustí: bash hlásí
+# "$'\r': command not found" a job spadne ještě před prvním krokem.
+
+*.sh text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sql text eol=lf
+*.py text eol=lf
+
+# Windows skripty naopak s CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Godot soubory – textové, ale ať se nemíchají konce řádků
+*.gd text eol=lf
+*.tscn text eol=lf
+*.tres text eol=lf
+*.godot text eol=lf
+*.cfg text eol=lf
+
+# Binární assety – nikdy nepřevádět
+*.png binary
+*.jpg binary
+*.wav binary
+*.ogg binary
+*.exe binary
+*.tpz binary

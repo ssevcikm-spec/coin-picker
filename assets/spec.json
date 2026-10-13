@@ -1,0 +1,34 @@
+{
+  "_popis": [
+    "Spec vzhledu hry Coin-Picker. Je to SMLOUVA mezi deklarací a kódem:",
+    "`tile` musí odpovídat buňce v mapě (`assets/levels/main.json`) i konstantě",
+    "v `scripts/level.gd`, jinak hra potichu kreslí jiné měřítko (brána",
+    "`.forge/check-schema.py` to měří).",
+    "",
+    "Projekce je ČTVERCOVÁ (dlaždice 32x32) — žádná izometrie. Kdyby se hra",
+    "někdy přepnula na kosočtverec, mění se `tile` na [96, 48] a brána si toho",
+    "všimne (kontroluje, že level.gd nestaví dlaždice osově zarovnaně)."
+  ],
+  "viewport": [480, 270],
+  "tile": { "sirka": 32, "vyska": 32, "pomer": "1:1" },
+  "role": {
+    "player": { "visual_height": 30, "canvas": 32, "smery": 1, "framy": 1, "stin": false },
+    "coin": { "visual_height": 12, "canvas": 16, "smery": 1, "framy": 1, "stin": false }
+  },
+  "gates": {
+    "_popis": "Meze, které vynucuje .forge/check-assets.py (a které si vynutila naměřená vada: mince 0,67x truhly, díra v siluetě, okraj s pozadím).",
+    "height_tolerance": 0.15,
+    "max_holes": 0,
+    "max_border_opaque": 0.05,
+    "min_silhouette_iou": 0.8,
+    "max_centroid_shift": 3.0
+  },
+  "styl": {
+    "_popis": "Prozatímní vzhled PILOTU: ploché barvy, žádný pixel-art ani realistický render. Assety jsou placeholder — nahradí je samostatná granule, až bude hra hrát.",
+    "technika": "generováno kódem (Pillow) v tools/make-assets.py",
+    "barvy": "plné barvy, bez palety a ditheringu",
+    "proporce": "hráč 30 px vysoký, mince 12 px (poměr 0,40 — víc by vypadalo jako druhá postava)"
+  },
+  "paleta": { "zdroj": null },
+  "stin": { "sirka_pomer": 0.7, "kryti": 0.35 }
+}

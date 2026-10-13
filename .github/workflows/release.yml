@@ -1,0 +1,179 @@
+name: Vydání hry (build + Release + web)
+
+# PROČ TO EXISTUJE: doposud se buildy jen ukládaly jako artefakt CI na 14 dní –
+# nikdo si hru nemohl zahrát ani stáhnout. Tenhle workflow z každého stavu main
+# udělá:
+#   1) stažitelné balíčky (Windows, Linux, Web) v jednom „rolling" Release,
+#   2) hratelnou webovou verzi na GitHub Pages (odkaz, který jde otevřít v prohlížeči).
+#
+# Poznámka k webu: export má vypnutá vlákna (variant/thread_support=false
+# v export_presets.cfg), takže nepotřebuje hlavičky COOP/COEP, které GitHub Pages
+# nastavit neumí. Kdyby se vlákna někdy zapnula, web na Pages přestane běžet.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write   # vytvoření Release a nahrání balíčků
+  pages: write      # nasazení webové verze
+  id-token: write   # potvrzení pro deploy-pages
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build a vydání
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Výstup pro job `deploy`: nasadí se jen když se Pages podařilo připravit.
+    # (Přístup k `needs.build.steps` v GitHub Actions neexistuje – musí to být
+    #  deklarovaný výstup jobu.)
+    outputs:
+      pages: ${{ steps.pages.outcome == 'success' && 'yes' || 'no' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godotu
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/forge
+          key: forge-godot-4.7.2
+
+      - name: Godot + exportní šablony
+        run: bash .forge/install-godot.sh
+
+      - name: Import assetů
+        run: '"$FORGE_GODOT" --headless --path . --import'
+
+      - name: Export (Windows, Linux, Web)
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mkdir -p build/windows build/linux build/web
+          "$FORGE_GODOT" --headless --path . --export-release "Windows Desktop" build/windows/game.exe
+          "$FORGE_GODOT" --headless --path . --export-release "Linux" build/linux/game.x86_64
+          "$FORGE_GODOT" --headless --path . --export-release "Web" build/web/index.html
+          ls -la build/windows build/linux build/web
+
+      - name: Zabalit balíčky
+        run: |
+          set -euo pipefail
+          (cd build/windows && zip -qr "$GITHUB_WORKSPACE/game-windows.zip" .)
+          (cd build/linux   && zip -qr "$GITHUB_WORKSPACE/game-linux.zip" .)
+          (cd build/web     && zip -qr "$GITHUB_WORKSPACE/game-web.zip" .)
+          ls -la "$GITHUB_WORKSPACE"/game-*.zip
+
+      - name: Vydat (rolling Release "latest")
+        # Jeden stálý odkaz na nejnovější build. Když Release neexistuje, založí se;
+        # jinak se do něj přepíšou balíčky (--clobber) a doplní se poznámky.
+        #
+        # POZOR – ODKAZ NA WEB SE MUSÍ ODVODIT, NE NAPSAT (opraveno 1. 10. 2026):
+        # Dřív tu byl natvrdo `…/forge-quest/` – tedy JINÁ, ŽIVÁ hra s vlastními
+        # Pages. Kdo odkaz otevřel, hrál jinou hru. První oprava to nahradila
+        # zástupným textem pro název repa – jenže to je jen jiný ruční zápis:
+        # instalátor (`install-into-repo.ps1`) kopíruje `.github` rekurzivně
+        # a NIC nenahrazuje, takže by každá nová hra vydala release s nefunkčním
+        # odkazem na neexistující repo. Naměřeno simulací `Copy-Item` (zástupný
+        # text zůstal v poznámkách 3× doslovně).
+        #
+        # Teď se bere z `github.repository` – jedno jediné místo pravdy, které
+        # GitHub nastaví sám. Názvy repa se nikde neopisují.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          POPIS=$(mktemp)
+          {
+            echo "Automatický build ze commitu \`${GITHUB_SHA:0:7}\` ($(date -u '+%Y-%m-%d %H:%M UTC'))."
+            echo
+            echo "**Jak si zahrát:**"
+            echo "- v prohlížeči: https://${REPO%%/*}.github.io/${REPO##*/}/"
+            echo "- Windows: stáhni \`game-windows.zip\` a spusť \`game.exe\`"
+            echo "- Linux: stáhni \`game-linux.zip\` a spusť \`game.x86_64\`"
+            echo
+            echo "> Odkaz je odvozený z názvu TOHOHLE repa (\`${REPO}\`)."
+            echo "> NIKDY se neopisuje z historie: v téhle šabloně býval natvrdo"
+            echo "> \`forge-quest\`, což je JINÁ živá hra s vlastními Pages – kdo odkaz"
+            echo "> otevřel, hrál jinou hru. Druhá past je psát sem zástupný text:"
+            echo "> ten se nikde nenahrazuje a v poznámkách zůstane doslovně."
+            echo
+            if [ -f docs/DESIGN.md ]; then
+              echo "---"
+              echo
+              cat docs/DESIGN.md
+            fi
+          } > "$POPIS"
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest game-windows.zip game-linux.zip game-web.zip --clobber
+            gh release edit latest --notes-file "$POPIS" --title "Nejnovější build"
+          else
+            gh release create latest --title "Nejnovější build" --notes-file "$POPIS" \
+              game-windows.zip game-linux.zip game-web.zip
+          fi
+          gh release view latest --json url --jq .url
+
+      - name: Připravit web pro Pages
+        run: |
+          # .nojekyll: bez něj Jekyll zahodí soubory začínající podtržítkem
+          touch build/web/.nojekyll
+          ls -la build/web | head -12
+
+      - name: Nastavit Pages
+        # POZOR: založit Pages umí jen token s právy správce repa. GITHUB_TOKEN
+        # v Actions to nesmí ("Resource not accessible by integration") a jemnozrnný
+        # PAT taky ne. Proto tenhle krok není smrtelný: Release s balíčky vznikne
+        # vždy a na chybějící Pages se jen upozorní.
+        # (Zkoušel jsem i Cloudflare: Workers/Pages mají limit 25 MiB na soubor
+        #  a Godotí index.wasm má 37,7 MiB, takže web tam nasadit nelze.)
+        id: pages
+        continue-on-error: true
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Nahrát web jako artefakt Pages
+        if: steps.pages.outcome == 'success'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+      - name: Když Pages nejdou zapnout
+        if: steps.pages.outcome != 'success'
+        run: |
+          echo "::warning::GitHub Pages nejsou zapnuté, webová verze se nenasadila."
+          echo "Zapni je jedním kliknutím: Settings → Pages → Source: GitHub Actions."
+          echo "Stažitelné balíčky (Windows/Linux/Web) jsou i tak v Release 'latest'."
+
+      - name: Označit nasazený web
+        if: steps.pages.outcome == 'success'
+        # POZOR: adresa webu se ODVOZUJE Z NÁZVU REPA (`github.repository`).
+        # Dřív tu bylo natvrdo `.../forge-quest/` – tedy JINÝ, živý repozitář
+        # s vlastní hrou; odkaz málem poslal uživatele hrát jinou hru.
+        # Druhá verze měla zástupný text pro název repa, který se NIKDE
+        # nenahrazuje (instalátor kopíruje `.github` bez substitucí) – takže
+        # by v poznámkách zůstal doslovně. Obě pasti zavírá `github.repository`.
+        #
+        # Skutečnou adresu nasazeného webu dává `deploy` job
+        # (`environment.url` = `steps.deployment.outputs.page_url`); tenhle
+        # řádek je jen pro člověka v logu.
+        env:
+          REPO: ${{ github.repository }}
+        run: echo "Web se nasadí na https://${REPO%%/*}.github.io/${REPO##*/}/"
+
+  deploy:
+    name: Nasazení webu
+    needs: build
+    if: needs.build.outputs.pages == 'yes'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Nasadit na GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

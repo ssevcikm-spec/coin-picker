@@ -1,0 +1,795 @@
+name: Forge agent
+
+# Jméno běhu nese run_key. Conductor podle něj běh najde přes GitHub API a sám
+# si převezme výsledek (polling). Díky tomu v repu nemusí být žádné další
+# tajemství a conductor uvidí i běh, který spadne dřív, než by cokoli poslal.
+run-name: "Forge #${{ inputs.task_id }} [${{ inputs.run_key }}]"
+
+# Spouští ho conductor (Cloudflare Worker) přes workflow_dispatch.
+#
+# Agenti pracují VÝHRADNĚ na tomto repu a na této hře – to je podmínka použití
+# GitHub Actions: nesmí sloužit jako obecný serverless backend.
+#
+# Bezpečnostní vzor (2 joby):
+#   job 1 – běží LLM a má klíče, ale jen právo ČÍST. Uloží patch jako artefakt.
+#   job 2 – nemá žádné klíče, ale má právo ZAPSAT a otevře PR.
+# Díky tomu se klíč z jobu 1 nemůže dostat do commitu.
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: ID úkolu v conductoru
+        required: true
+      run_key:
+        description: UUID běhu (podle něj conductor páruje report)
+        required: true
+      kind:
+        description: 'code | assets | build | research'
+        required: false
+        default: code
+      title:
+        description: Název úkolu
+        required: false
+        default: bez nazvu
+      prompt:
+        description: Zadání pro agenta
+        required: true
+      max_lines:
+        description: Limit velikosti změny pro auto-merge (z granule roadmapy; default 60)
+        required: false
+        default: '60'
+      model:
+        description: 'Modelová třída granule: any | strong (strong = jen silné modely z providers.json)'
+        required: false
+        default: any
+      grain:
+        description: 'ID granule v roadmapě (např. core.skills) – podle něj se bere owns, tedy soubory k editaci'
+        required: false
+        default: ''
+      attempt:
+        description: 'Číslo pokusu (1 = první). Podle něj se posouvá pořadí modelů, aby opakovaný pokus nezkoušel stejný model.'
+        required: false
+        default: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  # Každý běh má vlastní skupinu (run_key je unikátní UUID), takže se granulí
+  # můžou rozběhnout paralelně. Dřív tu byla jedna společná skupina „forge-agent"
+  # a GitHub při cancel-in-progress:false rušil všechny čekající běhy kromě
+  # posledního – paralelní dispatch z DAG roadmapy se tak sám rušil.
+  group: forge-agent-${{ inputs.run_key }}
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    name: Agent (free LLM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      status: ${{ steps.verdict.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache Godotu
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/forge
+          key: forge-godot-4.7.2
+
+      - name: Godot + exportní šablony
+        run: bash .forge/install-godot.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Nainstaluj aider
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install aider-chat
+
+      - name: Vyber bezplatného poskytovatele LLM
+        # Klíč se bere z Tajemství, a když tam není, z Proměnných. Je to běžná
+        # záměna (GitHub má „Secrets" a „Variables" vedle sebe) a kvůli ní už
+        # jeden běh zbytečně selhal na „žádný poskytovatel neodpověděl".
+        # POZOR: každý provider z providers.json musí být tady, jinak ho skript
+        # přeskočí s "chybí KLÍČ" – přesně to se stalo u Mistralu a Cerebrasu.
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || vars.GEMINI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY || vars.MISTRAL_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY || vars.CEREBRAS_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY || vars.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY || vars.OPENROUTER_API_KEY }}
+          # run_key posouvá pořadí poskytovatelů: opakované pokusy téže úlohy
+          # tak neběží pořád se stejným modelem (naměřeno: tři pokusy o úlohu
+          # #40 selhaly stejně, protože všechny tři vybraly codestral-latest).
+          FORGE_RUN_KEY: ${{ inputs.run_key }}
+          # Granule s model=strong (size_lines > 60) smí zpracovat jen silný
+          # model – pick-provider se pak zúží na strongModels z providers.json.
+          FORGE_MIN_STRONG: ${{ inputs.model }}
+        run: node .forge/pick-provider.mjs
+      - name: Spusť agenta
+        # Zadání jde do skriptu přes proměnnou, ne přes ${{ }} – jinak by se
+        # text z issue mohl vložit do shellu jako kód (script injection).
+        # Timeout je tu proto, že volání free LLM umí viset (poskytovatel drží
+        # spojení a neodpovídá). Bez něj by se spálil celý 45minutový job.
+        #
+        # DRUHÝ POKUS V TÉMŽE BĚHU: když model nezmění ani řádek, nemá smysl
+        # čekat 15 minut na další dispatch se stejným modelem. Naměřeno u úlohy
+        # #40: model navrhl patch, ale neaplikoval ho („nochange") – a další dva
+        # pokusy dopadly stejně. Tady se hned zkusí jiný poskytovatel; job je
+        # už naklizený, takže druhý pokus stojí jen čas modelu.
+        #
+        # TIMEOUT 30 min (bylo 20): běh #63 (úloha #44) dělal DVA pokusy s free
+        # modely a narazil na strop kroku – práce se pak ztratí, i když model
+        # třeba odpovídal. Dva pokusy se do 30 minut vejdou i s rezervou.
+        timeout-minutes: 30
+        env:
+          FORGE_PROMPT: ${{ inputs.prompt }}
+          FORGE_TITLE: ${{ inputs.title }}
+          FORGE_RUN_KEY: ${{ inputs.run_key }}
+          FORGE_MIN_STRONG: ${{ inputs.model }}
+          # ID granule v roadmapě (např. `core.skills`). Podle něj se hledá
+          # `owns` – seznam souborů, které agent smí měnit, a ty se předají
+          # aideru jako `--file` (editovatelné), ne jen přes repo-mapu.
+          # Prázdné ID není chyba: `files-to-edit.mjs` si cestu v tom případě
+          # vytáhne ze zadání.
+          FORGE_GRAIN: ${{ inputs.grain }}
+          # Číslo pokusu: pick-provider podle něj posune pořadí modelů, aby
+          # opakovaný pokus nezkoušel stejný model jako ten, co právě selhal.
+          # Naměřeno 30. 9. 2026: task #128 i #131 zkoušely 5× po sobě
+          # mistral/codestral a selhaly pokaždé stejně.
+          FORGE_ATTEMPT: ${{ inputs.attempt }}
+          # Klíče musí být i TADY, ne jen ve kroku s výběrem poskytovatele:
+          # druhý pokus volá pick-provider.mjs znovu a bez klíčů by hlásil
+          # „přeskočeno (chybí …)" u všech poskytovatelů. Naměřeno v běhu #57:
+          # druhý pokus se kvůli tomu vůbec nespustil (a dobře že ne – guard
+          # `if node … --next` zabránil běhu s neplatným modelem).
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || vars.GEMINI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY || vars.MISTRAL_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY || vars.CEREBRAS_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY || vars.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY || vars.OPENROUTER_API_KEY }}
+        run: |
+          set -o pipefail
+          nacti_poskytovatele() {
+            # GITHUB_ENV platí až pro DALŠÍ krok, proto si pick-provider.mjs
+            # píše i .forge/provider.env, který jde načíst hned tady.
+            set -a
+            . .forge/provider.env
+            set +a
+          }
+          # SOUBORY K EDITACI – ROOT CAUSE 0% ÚSPĚŠNOSTI (30. 9. 2026).
+          #
+          # Dřív se pouštěl aider jen s `--read CONVENTIONS.md`. Soubory granule
+          # se tím dostaly do repo-mapy (READ-ONLY), ale NE do chatu jako
+          # editovatelné. Aider má v promptu pravidlo „Only create SEARCH/REPLACE
+          # blocks for files that the user has added to the chat!" – takže model
+          # SPRÁVNĚ odmítl editovat a odpověděl „Please add the file's content to
+          # the chat". Udělaly to VŠECHNY modely (mistral 17–36 tokenů,
+          # cerebras 179–204) a běh skončil jako „agent nic nezměnil".
+          # (K3, 12. 10. 2026: `--read CONVENTIONS.md` už tu není — konvence jdou
+          # z deklarace granule, viz blok výš. Historii nechávám, je to důvod,
+          # proč soubory k editaci NESMÍ chybět v chatu.)
+          #
+          # Vysvětluje to i vzorec úspěch/neúspěch: granule, které soubor jen
+          # VYTVÁŘELY, prošly – na nový soubor není potřeba SEARCH blok. Granule,
+          # které existující soubor UPRAVOVALY, selhaly VŽDY, bez ohledu na model.
+          #
+          # `owns` granule je přesně seznam souborů, které granule vlastní
+          # (conductor podle něj zamyká souběh) – proto se bere odtud.
+          DO_EDITACE=$(node .forge/files-to-edit.mjs --grain "$FORGE_GRAIN" --prompt "$FORGE_PROMPT" || true)
+          ARG_SOUBORY=""
+          if [ -n "$DO_EDITACE" ]; then
+            echo "Soubory k editaci (dostane je jako --file, ne jen --read):"
+            echo "$DO_EDITACE" | sed 's/^/  /'
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              if [ ! -e "$f" ]; then
+                # Soubor granule ještě neexistuje → ZALOŽÍ SE PRÁZDNÝ a předá
+                # se aideru jako `--file`. Naměřeno 30. 9. 2026 (běh #129):
+                # bez toho soubor v chatu nebyl, a i když ho měl model teprve
+                # VYTVOŘIT, odpověděl „add the file to the chat". Aiderův
+                # prompt sice pro nový soubor chce prázdnou SEARCH sekci, jenže
+                # model bez souboru v chatu odmítne navrhnout cokoli.
+                # Prázdný soubor je jen zámek pro chat – když do něj model nic
+                # nenapíše, běh se uklidí ve „Verdikt a vytvoření patche"
+                # (git add -A) a testy ho stejně shodí jako nefunkční.
+                : > "$f"
+                echo "  (založen prázdný, ať je v chatu: $f)"
+              fi
+              ARG_SOUBORY="$ARG_SOUBORY --file $f"
+            done <<< "$DO_EDITACE"
+          else
+            echo "::warning::granule neurčuje žádný soubor – agent dostane jen zadání"
+          fi
+          # SOUBORY ZÁVISLÝCH GRANULÍ – JEN KE ČTENÍ.
+          #
+          # Naměřeno 30. 9. 2026 (běh #131, granule entity.npc): model pojmenoval
+          # typ podle závislé granule (`Economy`), ale její soubor nikdy neviděl
+          # → `Parse Error: Could not find type "Economy"`. Smlouvy závislostí
+          # má model dostat – jen je nesmí měnit, a to zajistí `--read`.
+          ARG_CTENI=""
+          CIT_DEPS=$(node .forge/files-to-edit.mjs --grain "$FORGE_GRAIN" --read-deps 2>/dev/null || true)
+          if [ -n "$CIT_DEPS" ]; then
+            echo "Soubory závislých granulí (jen ke čtení):"
+            echo "$CIT_DEPS" | sed 's/^/  /'
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              ARG_CTENI="$ARG_CTENI --read $f"
+            done <<< "$CIT_DEPS"
+          fi
+
+          # ── K1 (12. 10. 2026): HYGIENA ZADÁNÍ + ROZPOČET REQUESTU ──────────
+          # PROČ: aider si do chatu přidá každý soubor zmíněný v zadání
+          # (`base_coder.get_file_mentions`). Naměřeno z logů 9. 10.: zadání
+          # s „docs/TDD.md §1.1“ přitáhlo CELÝ dokument (16 127 tokenů) a request
+          # vyrostl na 39 167 tokenů proti stropu 8 000 (Groq zdarma) – model se
+          # tedy zadání NIKDY nedozvěděl. Hygiena cesty nahradí a vypíše úsporu.
+          ZADANI=$(node .forge/node/prompt-hygiene.mjs "$FORGE_PROMPT")
+
+          # ── K3 (12. 10. 2026): KONVENCE JEN PODLE DEKLARACE GRANULE ────────
+          # PROČ: do K3 tu bylo `--read CONVENTIONS.md` v KAŽDÉM běhu. Celý
+          # dokument má ~3 900 t a strop Groqu zdarma je 8 000 t/min, takže se
+          # request vůbec neposlal (naměřeno 12. 10. 2026: hygienické zadání M0
+          # mělo 14 097 t a všech 20 běhů dne selhalo). Konvence se proto
+          # rozdělily na sekce (`CONVENTIONS/*.md`) a GRANULE DEKLARUJE, které
+          # potřebuje: `"konvence": ["01-typy", "06-soubor-granule"]` v roadmapě.
+          # „Co se má poslat“ je vlastnost granule — hádat to podle klíčových
+          # slov v zadání by bylo věštění (a věštění se nedaří měřit).
+          # ROZPOČET DOSTÁVÁ TOTÉŽ přes `--konvence` — jinak by počítal request
+          # bez konvencí a brána by byla slepá přesně tam, kde rozhoduje.
+          KONVENCE=$(node .forge/files-to-edit.mjs --grain "$FORGE_GRAIN" --konvence || true)
+          ARG_KONVENCE=""
+          if [ -n "$KONVENCE" ]; then
+            echo "Sekce konvencí (agent je dostane jako --read):"
+            echo "$KONVENCE" | sed 's/^/  /'
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              # shellcheck disable=SC2086
+              ARG_KONVENCE="$ARG_KONVENCE --read $f"
+            done <<< "$KONVENCE"
+          else
+            echo "::warning::granule nedeklaruje konvence a v repu není CONVENTIONS.md – agent dostane jen zadání"
+          fi
+
+          # Rozpočet se ptá PŘED voláním: nevejde-li se, běh skončí pojmenovaně
+          # a nespálí pokus ani kvótu. `TRIDA` jde do prostředí pro report.
+          if ! node .forge/node/request-budget.mjs \
+                 --zadani-text "$ZADANI" --soubory "$DO_EDITACE" --cteni "$CIT_DEPS" \
+                 --konvence "$KONVENCE" \
+                 --poskytovatel "$FORGE_PROVIDER" --model "$FORGE_MODEL"; then
+            echo "REQUEST_TOO_LARGE: rozpocet requestu prevysil strop poskytovatele" >> agent.log
+            echo "TRIDA=REQUEST_TOO_LARGE" >> "$GITHUB_ENV"
+            exit 1
+          fi
+
+          spust_agenta() {
+            # shellcheck disable=SC2086
+            # TIMEOUT 300 s: aider/litellm zkouší TÝŽ request 9× s backoffem
+            # (0,2 s → 32 s). U „request too large“ je to deterministicky
+            # ztracený čas – naměřeno: běh #360 jím strávil 1214 s z 30min kroku.
+            casovy_kod=0
+            timeout 300 aider \
+              --model "openai/${FORGE_MODEL}" \
+              $ARG_KONVENCE \
+              $ARG_CTENI \
+              $ARG_SOUBORY \
+              --map-tokens 0 \
+              --edit-format diff \
+              --message "$ZADANI" \
+              --yes --no-auto-commits --no-stream --no-check-update \
+              2>&1 | tee -a agent.log || casovy_kod=$?
+            if [ "$casovy_kod" = "124" ]; then
+              echo "TIMEOUT: aider prekrocil 300 s (request se pravdepodobne opakoval)" | tee -a agent.log
+            elif [ "$casovy_kod" != "0" ]; then
+              echo "aider skoncil s chybou (kod $casovy_kod)"
+            fi
+          }
+          zmenil_neco() {
+            # .uid/.import generuje Godot sám a provider.env je naše – do
+            # „změnil agent něco?" nepatří (jinak by se nezměněný běh hlásil
+            # jako úspěch a do PR by šel jen náš pomocný soubor).
+            git status --porcelain \
+              | grep -Ev '\.(uid|import)$|^agent\.log$|^\.forge/provider\.(env|json)$' \
+              | grep -q .
+          }
+          spust_agenta
+          if ! zmenil_neco; then
+            # ── K2 (12. 10. 2026): ROZHODUJE KLASIFIKÁTOR, NE JEDEN GREP ────
+            # Dřív tu byl `grep RateLimitError`, který slil dohromady
+            # „request too large“ (deterministické, řeší se jiným zdrojem nebo
+            # menším kontextem) a „vyčerpaná kvóta“ (přechodné) – a fallback
+            # VYPNUL. Naměřeno 9. 10.: z 12 běhů, které spadly na VELIKOSTI
+            # requestu, se druhá záchrana nezkusila ani jednou.
+            TRIDA_PRVNI=$(node .forge/node/classify-agent-log.mjs --log agent.log --zmena ne \
+              | sed -n 's/^TRIDA=//p')
+            case "$TRIDA_PRVNI" in
+              AUTH)
+                echo "::warning::AUTH – špatný klíč se sám nespraví, druhý poskytovatel se nezkouší" ;;
+              QUOTA)
+                echo "::warning::QUOTA – šetřím kvótu, druhý poskytovatel se nezkouší" ;;
+              *)
+                echo "::notice::$TRIDA_PRVNI – zkouším jiného bezplatného poskytovatele"
+                if node .forge/pick-provider.mjs --next; then
+                  nacti_poskytovatele
+                  if node .forge/node/request-budget.mjs \
+                        --zadani-text "$ZADANI" --soubory "$DO_EDITACE" --cteni "$CIT_DEPS" \
+                        --konvence "$KONVENCE" \
+                        --poskytovatel "$FORGE_PROVIDER" --model "$FORGE_MODEL"; then
+                    spust_agenta
+                  else
+                    echo "::warning::ani další poskytovatel se do rozpočtu nevejde – request neposílám"
+                    echo "REQUEST_TOO_LARGE: ani dalsi poskytovatel se nevejde do rozpoctu" >> agent.log
+                  fi
+                fi ;;
+            esac
+          fi
+
+      - name: Kontrola parsování GDScriptu (rychlá brána)
+        # PROČ A JAK (30. 9. 2026):
+        #
+        # `godot --check-only --script <soubor>` pro KAŽDÝ ZMĚNĚNÝ .gd soubor.
+        # Platí i pro nové soubory, které ještě nikdo nenačítá (přesně případ
+        # granulí, které soubor zakládají) – a vrátí přesný soubor i řádek.
+        # Kontrolují se JEN změněné soubory: staré skripty v repu jsou ověřené.
+        #
+        # Vypisují se VŠECHNY chyby, ne jen první (`head -12` dřív ukázal jednu
+        # a zbytek zahodil, takže model při opakování opravil jednu a spadl na
+        # další). Naměřeno 30. 9. 2026 (běh #131): čtyři chyby v jednom souboru.
+        timeout-minutes: 3
+        id: parse
+        run: |
+          ZMENENE=$(git status --porcelain \
+            | grep -Ev '\.(uid|import)$|^.. (smoke|agent)\.log$|^.. \.forge/provider\.(env|json)$' \
+            | awk '{print $NF}' | grep '\.gd$' || true)
+
+          if [ -z "$ZMENENE" ]; then
+            echo "Agent nezměnil žádný .gd soubor – není co kontrolovat."
+            exit 0
+          fi
+
+          echo "Kontroluji parsování těchto souborů:"
+          echo "$ZMENENE" | sed 's/^/  /'
+          echo ""
+
+          CHYBY=0
+          for f in $ZMENENE; do
+            VYSTUP=$("$FORGE_GODOT" --headless --path . --check-only --script "res://$f" 2>&1 || true)
+            if echo "$VYSTUP" | grep -q 'SCRIPT ERROR: Parse Error'; then
+              CHYBY=$((CHYBY + 1))
+              echo "::error file=$f::Skript se neparsuje – $f"
+              echo "$VYSTUP" | grep -A1 'SCRIPT ERROR: Parse Error' | head -40
+              echo ""
+            else
+              echo "  OK  $f"
+            fi
+          done
+
+          if [ "$CHYBY" -gt 0 ]; then
+            echo "::error::$CHYBY souborů se neparsuje – testy nemá cenu pouštět"
+            # POZOR: v TIP echách NESMÍ být zpětné apostrofy ani $( ). Bash je
+            # uvnitř dvojitých uvozovek bere jako substituci, takže se text
+            # POKUSÍ SPUSTIT – a do logu se místo chyby modelu vysypou
+            # 'var: command not found' a 'syntax error near unexpected token'.
+            # Naměřeno 1. 10. 2026 (běh #241): skutečná příčina selhání
+            # (ALIGN_LEFT neexistuje v Godotu 4) se v tom šumu ztratila.
+            # Kódové ukázky proto BEZ apostrofů – jen slovy a v uvozovkách.
+            echo "TIP: nejčastější příčiny (sekce konvencí dostane agent jako --read):"
+            echo "     - File/json místo FileAccess/JSON (CONVENTIONS/04-soubory-json.md §1c)"
+            echo "     - kolize jmen s enginem: class_name Item, funkce get()"
+            echo "       (CONVENTIONS/02-reservovana-jmena.md §1d, 03-kolize-clenu.md §1f)"
+            echo "     - NIKDY nedeklaruj promenne position/scale/rotation/visible/name"
+            echo "       (členové Area2D/Node2D → 'Member redefined')"
+            echo "     - prirazeni z load(...) nebo z uzlu potrebuje VYJADRENY typ"
+            echo "       ('var x: Node = ...'), jinak 'Cannot infer the type of x'"
+            echo "       (CONVENTIONS/01-typy.md §1)"
+            echo "     - 'Identifier X not declared' bývá jen NÁSLEDEK předchozích"
+            echo "       chyb v témž souboru – oprav první z nich."
+            echo "     - konstanty z Godotu 3 NEEXISTUJÍ (CONVENTIONS/05-godot3-konstanty.md §1h):"
+            echo "       ALIGN_LEFT -> HORIZONTAL_ALIGNMENT_LEFT, VALIGN_TOP ->"
+            echo "       VERTICAL_ALIGNMENT_TOP (naměřeno 1. 10. 2026, běh #241)."
+            exit 1
+          fi
+          echo "Parsování v pořádku ($(echo "$ZMENENE" | wc -l) souborů)."
+
+      - name: Kontrola class_name (staticky, Godot to nepozná)
+        # PROČ (naměřeno 30. 9. 2026, granule entity.item):
+        #
+        # Když soubor deklaruje `class_name GameItem` a ZÁROVEŇ uvnitř definuje
+        # `class GameItem extends Resource`, vnořená třída přebije tu globální.
+        # `new()` pak vrátí vnořenou třídu – nemá smluvní metody (testy hlásí
+        # „item.gd poskytuje use/repair/broken" jako FAIL) a jako RefCounted
+        # navíc spadne na `free()` v testech, což PŘERUŠÍ celý běh testů.
+        # V logu pak není nic než „překročen tvrdý limit 90 s".
+        #
+        # `godot --check-only` tenhle tvar propustí s exit 0 a BEZ chyby
+        # (ověřeno), takže na to engine nemá nástroj – kontroluje se text.
+        timeout-minutes: 2
+        run: |
+          ZMENENE=$(git status --porcelain \
+            | grep -Ev '\.(uid|import)$|^.. (smoke|agent)\.log$|^.. \.forge/provider\.(env|json)$' \
+            | awk '{print $NF}' | grep '\.gd$' || true)
+
+          if [ -z "$ZMENENE" ]; then
+            echo "Agent nezměnil žádný .gd soubor – není co kontrolovat."
+            exit 0
+          fi
+
+          CHYBY=0
+          for f in $ZMENENE; do
+            JMENO=$(grep -m1 -oE '^class_name[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$f" | awk '{print $2}' || true)
+            if [ -z "$JMENO" ]; then
+              continue
+            fi
+            if grep -qE "^class[[:space:]]+$JMENO([[:space:]]|:|$)" "$f"; then
+              echo "::error file=$f::$f deklaruje class_name $JMENO a zároveň definuje vnořenou class $JMENO – vnořená třída přebije globální jméno"
+              CHYBY=$((CHYBY + 1))
+            else
+              echo "  OK  $f (class_name $JMENO)"
+            fi
+          done
+
+          if [ "$CHYBY" -gt 0 ]; then
+            echo "TIP: soubor SÁM JE ta třída – začni 'extends Node' a vnořenou class smaž (CONVENTIONS.md §1g)."
+            exit 1
+          fi
+          echo "class_name v pořádku."
+
+      - name: Import assetů (než se pustí brána a testy)
+        # PROČ SAMOSTATNÝ KROK (dřív byl import až uvnitř testů):
+        # assety potřebuje UŽ BRÁNA NA PARSOVÁNÍ. Godot v režimu `--script` ani
+        # `--check-only` assety NEIMPORTUJE, takže skript odkazující na texturu
+        # hlásí chybu, kterou nemá – a v čerstvém checkoutu runneru nejsou
+        # `.godot/imported/*.ctex` (`.godot/` je v .gitignore).
+        # Naměřeno 30. 9. 2026 (hra uo-shadows): bez importu padaly testy VŽDY
+        # na „všechny assety jdou načíst (3 OK, 16 chybí)" a orchestr nemohl
+        # uspět, i když agent udělal svou práci správně.
+        timeout-minutes: 5
+        run: '"$FORGE_GODOT" --headless --path . --import 2>&1 | tail -3'
+
+      - name: Testy hry (Godot headless)
+        # POZOR: tenhle timeout tam musí být. Bez něj se stalo, že patch od
+        # agenta obsahoval nekonečnou smyčku, Godot se zasekl a krok visel
+        # 15+ minut (naměřeno) – místo rychlého „testy selhaly" se čekalo na
+        # timeout celého jobu. 3 minuty jsou 20× víc, než testy reálně trvají.
+        timeout-minutes: 5
+        id: tests
+        run: |
+          set -o pipefail
+
+          spust_testy() {
+            timeout 150 "$FORGE_GODOT" --headless --path . \
+              --script res://tests/run_tests.gd 2>&1 | tee -a agent.log
+          }
+
+          if ! spust_testy; then
+            # MECHANICKÁ OPRAVA TYPOVÉ CHYBY. Slabé modely opakovaně napíšou
+            # `var x := <výraz z neotypovaného uzlu>` a Godot ohlásí
+            # „Cannot infer the type of x" – hra se pak vůbec nenačte.
+            # Zamýšleli přitom `var x = …` (Variant). Je to bezpečná, cílená
+            # oprava podle konkrétní hlášky, ne hádání – a ušetří celý pokus.
+            python3 - <<'PY'
+          import pathlib, re, subprocess
+          log = pathlib.Path("agent.log").read_text(errors="replace")
+          jmena = sorted(set(re.findall(r'Cannot infer the type of "([A-Za-z_][A-Za-z0-9_]*)"', log)))
+          if not jmena:
+              print("typová chyba v logu není – opravovat není co")
+              raise SystemExit(0)
+          print("typová chyba u:", ", ".join(jmena))
+          zmenene = subprocess.run(["git", "diff", "--name-only"], capture_output=True,
+                                   text=True).stdout.split()
+          for f in zmenene:
+              if not f.endswith(".gd"):
+                  continue
+              p = pathlib.Path(f)
+              t = p.read_text(encoding="utf-8")
+              for j in jmena:
+                  novy, n = re.subn(rf'(?m)^(\s*var\s+{re.escape(j)})\s*:=', r'\1 =', t)
+                  if n:
+                      print(f"  {f}: var {j} := -> =")
+                      t = novy
+              p.write_text(t, encoding="utf-8")
+          PY
+            if ! spust_testy; then
+              echo "::error::testy selhaly i po mechanické opravě typů"
+              exit 1
+            fi
+            echo "::notice::testy prošly po mechanické opravě typové chyby"
+          fi
+
+          # Hra se musí spustit bez chyby ve skriptu. Exit kód to neřekne –
+          # naměřeno: hra s chybou skončí s exit=0 (PR #9 takhle přišel o všechny
+          # nepřátele a testy i CI hlásily úspěch). Kontroluje se proto výstup.
+          # Log patří MIMO repo (RUNNER_TEMP): když se psal do pracovní složky,
+          # dostal se přes `git add -A` do patche a do pull requestu (stalo se
+          # u PR #10 – v PR pak nebylo nic než tenhle log a vygenerovaný .uid).
+          SMOKE="${RUNNER_TEMP:-/tmp}/smoke.log"
+          timeout 60 "$FORGE_GODOT" --headless --path . --quit-after 120 > "$SMOKE" 2>&1 || true
+          if grep -q "SCRIPT ERROR" "$SMOKE"; then
+            echo "::error::Patch se sice načte, ale hra běží s chybou ve skriptu"
+            grep -n "SCRIPT ERROR" "$SMOKE" | head -5
+            exit 1
+          fi
+
+      - name: Verdikt a vytvoření patche
+        id: verdict
+        if: always()
+        run: |
+          git add -A
+          git diff --cached --binary > agent.patch || true
+          echo "--- zmeny ---"
+          git diff --cached --stat | tail -20
+          # „Změnil agent něco?" se NESMÍ ptát jen na neprázdný patch: Godot sám
+          # generuje .uid/.import a náš běh mohl zanechat log, takže patch není
+          # prázdný, i když agent neudělal nic (naměřeno u PR #10).
+          ZMENA=$(git diff --cached --name-only | grep -Ev '\.(uid|import)$|^smoke\.log$|^agent\.log$|^\.forge/provider\.(env|json)$' | head -5)
+          echo "skutecne zmeny: ${ZMENA:-zadne}"
+          # K2: pojmenovaná příčina do výstupu i do prostředí. `zmena` se
+          # předává klasifikátoru, aby „nic nezměnil“ nebylo zaměněno za chybu.
+          if [ -n "$ZMENA" ]; then echo "zmena=ano" >> "$GITHUB_OUTPUT"; else echo "zmena=ne" >> "$GITHUB_OUTPUT"; fi
+          TRIDA=$(node .forge/node/classify-agent-log.mjs --log agent.log \
+            --zmena "$([ -n "$ZMENA" ] && echo ano || echo ne)" \
+            --parsovani "${{ steps.parse.outcome }}" --testy "${{ steps.tests.outcome }}" \
+            | sed -n 's/^TRIDA=//p')
+          echo "trida=$TRIDA" >> "$GITHUB_OUTPUT"
+          echo "TRIDA=$TRIDA" >> "$GITHUB_ENV"
+          echo "klasifikace: $TRIDA"
+          if [ "${{ steps.tests.outcome }}" != "success" ]; then
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          elif [ -n "$ZMENA" ]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          else
+            # Agent nezměnil ani řádek (u slabších modelů se to stane). Není to
+            # „hotovo" – je to neúspěch pokusu. Bez tohohle rozlišení padal
+            # další krok na „No valid patches in input", což vypadalo jako
+            # rozbitá pipeline, i když šlo jen o to, že model nic neudělal.
+            echo "status=nochange" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Agent nic nezměnil → hlásíme neúspěch
+        if: steps.verdict.outputs.status == 'nochange'
+        run: |
+          echo "::error::Agent nezměnil žádný kód (TRIDA=${TRIDA:-NEZNAMA}). Zkusí se to znovu (u jiného pokusu to vyjde)."
+          exit 1
+
+      - name: Report při selhání (s POJMENOVANOU příčinou)
+        # K2 (12. 10. 2026): dřív se report posílal JEN když spadly testy.
+        # Při „agent nic nezměnil“ testy projdou, takže conductor nedostal NIC
+        # a v /status zůstalo jen „GitHub Actions: failure“ – a bez příčiny se
+        # nedá rotovat poskytovatele ani odpustit pokus granulí.
+        if: always() && steps.verdict.outputs.status != 'success'
+        env:
+          # K4 (12. 10. 2026): URL se bere i z PROMĚNNÝCH — není to tajemství
+          # (je to adresa služby, kterou stejně vidí každý běh) a díky tomu ji
+          # jde nové hře zapsat přes API bez sealed-box crypto. Hra pak potřebuje
+          # jen DVA secrety: `FORGE_PAT` a `FORGE_WEBHOOK_SECRET`.
+          # Tajemství tajemstvím zůstává: `FORGE_SECRET` se z proměnných NEbere.
+          FORGE_URL: ${{ secrets.FORGE_CONDUCTOR_URL || vars.FORGE_CONDUCTOR_URL }}
+          FORGE_SECRET: ${{ secrets.FORGE_WEBHOOK_SECRET }}
+          FORGE_RUN_KEY: ${{ inputs.run_key }}
+        run: |
+          TRIDA="${TRIDA:-$(node .forge/node/classify-agent-log.mjs --log agent.log \
+            --zmena "${{ steps.verdict.outputs.zmena }}" --parsovani "${{ steps.parse.outcome }}" \
+            --testy "${{ steps.tests.outcome }}" | sed -n 's/^TRIDA=//p')}"
+          ROZBOR=$(node .forge/node/classify-agent-log.mjs --log agent.log | tr '\n' ' ')
+          echo "posilam pricinu: $TRIDA"
+          node .forge/report.mjs failed "$TRIDA | $ROZBOR"
+        continue-on-error: true
+
+      - name: Ulož patch a log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-patch-${{ inputs.run_key }}
+          path: |
+            agent.patch
+            agent.log
+          retention-days: 7
+
+  pull-request:
+    name: Otevři pull request
+    needs: agent
+    if: needs.agent.outputs.status == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      pr_number: ${{ steps.pr.outputs.pull-request-number }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Větev PR se staví z AKTUÁLNÍHO main (ne z toho, jaký byl v okamžiku
+      # zadání) – kdyby uživatel mezitím něco mergnul, změna se aplikuje
+      # na nejnovější stav a nevznikne zbytečný konflikt.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Stáhni patch z agenta
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-patch-${{ inputs.run_key }}
+          path: .
+
+      - name: Aplikuj změny
+        run: git apply --binary --whitespace=nowarn agent.patch
+
+      - name: Otevři pull request
+        id: pr
+        uses: peter-evans/create-pull-request@v8
+        with:
+          # Vlastní token (PAT). Výchozí GITHUB_TOKEN nemůže zakládat pull
+          # requesty, dokud to správce repa v nastavení nepovolí – a náš první
+          # běh na tom spadl ("GitHub Actions is not permitted to create or
+          # approve pull requests"). Výhoda navíc: PR z PAT spustí navazující CI,
+          # což PR z GITHUB_TOKEN neumí.
+          token: ${{ secrets.FORGE_PAT }}
+          branch: forge/task-${{ inputs.task_id }}
+          base: main
+          title: "Forge #${{ inputs.task_id }}: ${{ inputs.title }}"
+          commit-message: "forge: ${{ inputs.title }}"
+          delete-branch: true
+          labels: forge-agent
+          body: |
+            Automaticky vytvořeno orchestrem **Forge**.
+
+            | | |
+            |---|---|
+            | Úkol | #${{ inputs.task_id }} – ${{ inputs.title }} |
+            | Druh | `${{ inputs.kind }}` |
+            | Běh | `${{ inputs.run_key }}` |
+            | Model | určen za běhu z bezplatných poskytovatelů |
+
+            **Co zkontrolovat před mergem:** že hra dělá, co zadání říká,
+            a že testy v CI prošly. Agent pracoval bez dohledu – ber to jako
+            návrh, ne jako hotovou věc.
+
+      - name: Report do conductora
+        # Když report selže, běh se nesmí tvářit jako neúspěšný – PR už je
+        # otevřený a conductor si ho najde sám přes GitHub API (polling).
+        continue-on-error: true
+        env:
+          # K4: URL i z proměnných (viz komentář u kroku „Report při selhání“).
+          FORGE_URL: ${{ secrets.FORGE_CONDUCTOR_URL || vars.FORGE_CONDUCTOR_URL }}
+          FORGE_SECRET: ${{ secrets.FORGE_WEBHOOK_SECRET }}
+          FORGE_RUN_KEY: ${{ inputs.run_key }}
+        run: node .forge/report.mjs success "PR vytvoren" "${{ steps.pr.outputs.pull-request-url }}"
+
+  # ---------------------------------------------------------------------------
+  # AUTOMATICKÉ SLOUČENÍ
+  #
+  # Uživatel většinu pull requestů kontrolovat nebude, takže je potřeba, aby se
+  # bezpečné změny sloučily samy – ale jen ty, u kterých to je bezpečné.
+  # Pravidla (všechna musí projít):
+  #   1) změna se smí dotknout JEN scripts/ a assets/,
+  #   2) NIKDY tests/, .github/, .forge/ ani project.godot – jinak by si agent
+  #      mohl „opravit" vlastní kontrolu, což je přesně to, co nechceme,
+  #   3) změna je malá (do limitu granule `max_lines`, výchozí 60),
+  #   4) nezávisle to potvrdí CI na tom PR (ne jen agent sám).
+  # Když cokoli neprojde, PR zůstane otevřený a dostane komentář s vysvětlením.
+  # ---------------------------------------------------------------------------
+  auto-merge:
+    name: Automatické sloučení (jen bezpečné změny)
+    needs: [agent, pull-request]
+    if: needs.pull-request.outputs.pr_number != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      # Bez tohohle `gh` neví, se kterým repozitářem pracuje: tenhle job
+      # záměrně nedělá checkout, takže si repo nemá z čeho odvodit a spadne na
+      # "fatal: not a git repository". Stačí mu ho říct rovnou.
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Pravidla – smí se to sloučit samo?
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.FORGE_PAT }}
+          PR: ${{ needs.pull-request.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # Velikost změny se počítá BEZ generovaných souborů. Godot si k obrázkům
+          # píše .import a ke skriptům .uid; nejsou to změny agenta, ale gate je
+          # dřív počítal do limitu 60 řádků. Naměřeno u PR #27: agent přidal
+          # 12 řádků kódu a kvůli 80 řádkům .import (které jsem zapomněl
+          # commitnout já) byl PR zamítnutý k ruční kontrole.
+          gh pr view "$PR" --json files \
+            --jq '.files[] | "\(.additions) \(.deletions) \(.path)"' > /tmp/files.txt
+          ok=1
+          add=0
+          del=0
+          echo "soubory ve změně:"
+          while read -r a d f; do
+            # Generované soubory se přeskakují PRVNÍ, ještě před kontrolou
+            # složky. Godot si .import/.uid přepisuje sám a při importu assetů
+            # v runneru jich přepíše stovky – řada z nich leží mimo scripts/
+            # a assets/ (např. tools/blender/, kde jich u uo-shadows bylo 260).
+            # Když se složka kontrolovala dřív, KAŽDÝ PR skončil na „mimo
+            # povolené složky" a nechal se na ruční sloučení.
+            case "$f" in
+              *.import|*.uid)
+                echo "  (generované Godotem, přeskočeno: $f)"
+                continue ;;
+            esac
+            case "$f" in
+              scripts/*|assets/*) ;;
+              *) echo "  !! mimo povolené složky: $f"; ok=0 ;;
+            esac
+            case "$f" in
+              tests/*|.github/*|.forge/*|project.godot) echo "  !! chráněný soubor: $f"; ok=0 ;;
+            esac
+            case "$f" in
+              *.import|*.uid) echo "  (generované, do velikosti se nepočítá) $f"; continue ;;
+            esac
+            echo "  +$a/-$d  $f"
+            add=$((add + a))
+            del=$((del + d))
+          done < /tmp/files.txt
+          echo "změna (jen skutečná práce): +$add -$del"
+          # Limit se bere z granule (inputs.max_lines): conductor ho předává
+          # z roadmapy (size_lines); default 60 odpovídá slabému modelu.
+          if [ $((add + del)) -gt ${{ inputs.max_lines }} ]; then
+            echo "!! velká změna ($((add + del)) řádků, limit ${{ inputs.max_lines }})"; ok=0
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+
+      - name: Počkej, až testy nezávisle potvrdí CI
+        id: ci
+        if: steps.gate.outputs.ok == '1'
+        env:
+          GH_TOKEN: ${{ secrets.FORGE_PAT }}
+          PR: ${{ needs.pull-request.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # Zajímá nás JEN naše kontrola z ci.yml ("Testy a build"). Dřív se
+          # čekalo na celý statusCheckRollup a jakákoli cizí červená kontrola
+          # sloučení zablokovala – naměřeno u PR #21, kde repo napojila
+          # cloudflarová "Workers Builds" a ta logicky selhala (v repu hry
+          # žádný Worker není). Cizí kontroly se jen vypíšou.
+          for i in $(seq 1 30); do
+            roll=$(gh pr view "$PR" --json statusCheckRollup \
+                   --jq '[.statusCheckRollup[]? | {n: (.name // .context // "?"), s: (.conclusion // "PENDING")}]' \
+                   || echo "[]")
+            echo "pokus $i: $roll"
+            nase=$(echo "$roll" | jq -r '[.[] | select(.n == "Testy a build")] | .[0].s // "PENDING"')
+            case "$nase" in
+              SUCCESS) echo "ci=ok" >> "$GITHUB_OUTPUT"; exit 0 ;;
+              FAILURE|CANCELLED|TIMED_OUT|ACTION_REQUIRED|STARTUP_FAILURE)
+                echo "::error::naše kontrola 'Testy a build' skončila jako $nase"
+                echo "ci=bad" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            esac
+            sleep 20
+          done
+          echo "ci=timeout" >> "$GITHUB_OUTPUT"
+
+      - name: Sloučit (squash) a smazat větev
+        if: steps.gate.outputs.ok == '1' && steps.ci.outputs.ci == 'ok'
+        env:
+          GH_TOKEN: ${{ secrets.FORGE_PAT }}
+          PR: ${{ needs.pull-request.outputs.pr_number }}
+        run: gh pr merge "$PR" --squash --delete-branch
+
+      - name: Když pravidla neprošla – nechá se k ruční kontrole
+        if: steps.gate.outputs.ok != '1' || steps.ci.outputs.ci != 'ok'
+        env:
+          GH_TOKEN: ${{ secrets.FORGE_PAT }}
+          PR: ${{ needs.pull-request.outputs.pr_number }}
+        run: |
+          gh pr comment "$PR" --body "🤖 **Automatické sloučení neproběhlo** (pravidla: ${{ steps.gate.outputs.ok }}, CI: ${{ steps.ci.outputs.ci }}).
+
+          Buď je změna větší než limit granule (${{ inputs.max_lines }} řádků), sahá mimo \`scripts/\` a \`assets/\`, nebo se dotýká testů či orchestrace – a to agent sám nesmí. Podívej se na ni prosím ručně."
+          # A3: nenulový kód je PODSTATNÝ. Bez něj byl celý job zelený i když se
+          # nesloučilo – a conductor se ptal na `conclusion` běhu, takže z toho
+          # vznikalo „hotovo" bez práce v `main` (S31/S32). Komentář sám
+          # nestačí: brána, která nemá jak selhat, není brána.
+          # POZOR: tohle smí být až POTÉ, co `done` závisí na `merged` (A1) –
+          # jinak PR nesloučen → běh červený → úloha zpět `ready` → smyčka.
+          exit 1

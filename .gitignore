@@ -1,0 +1,29 @@
+# Godot
+.godot/
+.godot-user/
+*.translation
+export_presets.cfg.bak
+
+# Buildy a artefakty (v CI se generují znovu)
+build/
+artifacts/
+assets/_raw/
+
+# Tajemství – NIKDY do gitu.
+# `git add -A` v CI by je poslal do patche i do PR.
+.env
+.forge/node/.env
+.secrets/
+
+# Python cache po LOKÁLNÍM spuštění bran (.forge/check-*.py apod.).
+__pycache__/
+*.pyc
+
+# Lokální nástroje a běhové artefakty agenta
+.forge/provider.json
+.forge/provider.env
+.forge/*.log
+agent.patch
+agent.log
+smoke.log
+.aider*

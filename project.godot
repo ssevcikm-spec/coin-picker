@@ -1,0 +1,35 @@
+; Coin-Picker — startovní 2D projekt pro Godot 4.7.
+; Hra se skládá PROGRAMOVĚ ze skriptu (scripts/game.gd) — díky tomu se dá celá
+; generovat a upravovat textem, bez klikání v editoru (konvence §3).
+
+config_version=5
+
+[application]
+
+config/name="coin-picker"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7")
+
+[input]
+
+input_devices=PackedStringArray("keyboard", "mouse")
+
+[display]
+
+window/size/viewport_width=480
+window/size/viewport_height=270
+window/size/window_width_override=960
+window/size/window_height_override=540
+window/stretch/mode="viewport"
+window/stretch/aspect="keep"
+
+[rendering]
+
+renderer/rendering_method="mobile"
+; 0 = Nearest — ostré hrany dlaždic i spritů, žádné rozmazání
+textures/canvas_textures/default_texture_filter=0
+environment/defaults/default_clear_color=Color(0.09, 0.11, 0.16, 1)
+
+[physics]
+
+common/physics_ticks_per_second=60

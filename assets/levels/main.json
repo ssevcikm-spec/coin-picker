@@ -1,0 +1,88 @@
+{
+  "_popis": [
+    "Mapa úrovně Coin-Pickeru. GENEROVANÁ: `python tools/make-assets.py`.",
+    "`cell` musí odpovídat `tile.sirka` v assets/spec.json a konstantě CELL",
+    "v scripts/level.gd — brána .forge/check-schema.py ta čísla porovnává.",
+    "Statistiky níž se POČÍTAJÍ z mřížky, neopisují se (ruční číslo by se",
+    "s mřížkou rozešlo a nikdo by si toho nevšiml)."
+  ],
+  "name": "main",
+  "cell": 32,
+  "width": 15,
+  "height": 8,
+  "viewport": [
+    480,
+    270
+  ],
+  "offset": [
+    0,
+    0
+  ],
+  "legend": {
+    "0": "wall",
+    "1": "floor"
+  },
+  "tiles": {
+    "0": "stone",
+    "1": "floor"
+  },
+  "grid": [
+    "###############",
+    "#.............#",
+    "#..##.........#",
+    "#..##.....##..#",
+    "#.........##..#",
+    "#.....##......#",
+    "#.....##......#",
+    "###############"
+  ],
+  "markers": [
+    {
+      "type": "spawn",
+      "cell": [
+        2,
+        2
+      ]
+    },
+    {
+      "type": "exit",
+      "cell": [
+        12,
+        6
+      ]
+    },
+    {
+      "type": "coin",
+      "cell": [
+        4,
+        5
+      ]
+    },
+    {
+      "type": "coin",
+      "cell": [
+        11,
+        1
+      ]
+    },
+    {
+      "type": "coin",
+      "cell": [
+        9,
+        6
+      ]
+    }
+  ],
+  "stats": {
+    "width": 15,
+    "height": 8,
+    "cells": 120,
+    "walkable": 66,
+    "floor_ratio": 0.55,
+    "reachable": 66,
+    "connectivity": 1.0,
+    "spawn_walkable": true,
+    "markers": 5,
+    "markers_unreachable": []
+  }
+}

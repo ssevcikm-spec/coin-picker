@@ -1,0 +1,182 @@
+name: CI (testy a build)
+
+# Běží na každý push do main a na každý pull request – tedy i na PR od agenta.
+# Ověřuje to, co je na hře nejdůležitější: že se projekt naimportuje, že projdou
+# testy a že se dá vyexportovat build.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: Testy a build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godotu
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/forge
+          key: forge-godot-4.7.2
+
+      - name: Godot + exportní šablony
+        run: bash .forge/install-godot.sh
+
+      - name: Import assetů
+        timeout-minutes: 5
+        run: '"$FORGE_GODOT" --headless --path . --import'
+
+      - name: Kontrola vizuálního schématu (deklarace vs. skutečnost)
+        # TVRDÁ BRÁNA, a je to záměr: nejde o názor modelu, ale o objektivní
+        # fakt. Deklarace (spec.json), mapy (levels/*.json), vykreslování
+        # (level.gd), dlaždice (tiles/) a druhá logika (world.gd) musí říkat
+        # TOTÉŽ ČÍSLO.
+        #
+        # Naměřeno 30. 9. 2026: rozešly se na čtyři hodnoty – spec.json tvrdil
+        # izometrii 96×48, level.gd kreslil 16px čtverce, dlaždice byly 32px
+        # a world.gd měl 32px s izometrií, kterou nikdo nepoužíval. Důsledek:
+        # izometrický pohled NEMOHL vzniknout, ať se sprity ladily jakkoli –
+        # a nikdo si toho nevšiml, protože se to nikde neporovnávalo.
+        #
+        # PROČ PŘED VISION: vizuální kontrola potřebuje vědět, PROTI ČEMU měří.
+        # Když si hra odporuje, vision hlásí buď věčné nekonzistence, nebo nic.
+        # Tohle je navíc zdarma a běží 0,2 s.
+        timeout-minutes: 2
+        run: |
+          # POZOR – PILLOW JE TU POVINNÝ, i když se to nezdá:
+          # `.forge/check-schema.py:386` importuje `PIL` UVNITŘ funkce a jen když
+          # hra má sprity (`assets/sprites/` + `role` ve specu). U hry bez
+          # spritů se import nikdy nespustí, takže se to na prázdném projektu
+          # neprojeví – a proto to nikdo nezachytil.
+          #
+          # Naměřeno 1. 10. 2026: brána spadla na `ModuleNotFoundError: No module
+          # named 'PIL'`. Byla to PRVNÍ brána celého CI, takže `main` zezelenal
+          # nikdy – a protože `/failed` conductora hlásí selhané ÚLOHY (ne běhy),
+          # orchestra 7,5 h nevydala ani granuli a `/health` přitom hlásil
+          # `ok: true`. Tichá chyba, kterou nešlo vidět z conductoru.
+          #
+          # Když sem přidáš bránu, která importuje knihovnu mimo stdlib,
+          # DOPLŇ SEM I JEJÍ INSTALACI. Krok na :70 a :119 to mají taky.
+          python3 -m pip install --quiet pillow
+          python3 .forge/check-schema.py .
+
+      - name: Testy hry
+        # Timeout i tady: kdyby se do hry dostala nekonečná smyčka (stalo se to
+        # u patche od agenta), testy by visely až do limitu celého jobu.
+        timeout-minutes: 3
+        run: timeout 150 "$FORGE_GODOT" --headless --path . --script res://tests/run_tests.gd
+
+      - name: Kontrola kvality assetů (spec)
+        # Testy poznají, že hra FUNGUJE; tahle kontrola pozná, že VYPADÁ a ZNÍ
+        # podle specu (`assets/spec.json`): měřítko postav, díry v siluetě,
+        # konzistence animace – a od 25. 9. 2026 i hudba: jestli má motiv, který
+        # se vrací, nebo je to náhodná změť tónů (přesně to uživatel slyšel).
+        # Měří se i to, co se nedá „nakreslit": korelace taktů ve skutečných
+        # vzorcích vedoucího hlasu.
+        timeout-minutes: 5
+        run: |
+          python3 -m pip install --quiet pillow
+          python3 .forge/check-assets.py .
+
+      - name: Kontrola zapojení kódu (žádný mrtvý kód)
+        # Nejdražší druh chyby je „hotová funkce na papíře": PR #32 přidal
+        # `_on_enemy_stomped()`, ale nikde ji nezavolal – hráč tedy nepřítele
+        # pořád jen zabít nemohl a testy to nepoznaly (netestují, co nikdo
+        # nevolá). Tahle kontrola hlídá, že každá funkce je odněkud volaná.
+        timeout-minutes: 3
+        run: python3 .forge/check-wiring.py .
+
+      - name: Hra se spustí bez chyby ve skriptu
+        # Exit kód NESTAČÍ: hra s chybou ve skriptu skončí s exit=0 a chybu jen
+        # vypíše (naměřeno: PR #9 takhle tiše přišel o všechny nepřátele a CI
+        # hlásilo úspěch). Proto se hledá "SCRIPT ERROR" ve výstupu.
+        timeout-minutes: 2
+        run: |
+          set -o pipefail
+          SMOKE="${RUNNER_TEMP:-/tmp}/smoke.log"
+          timeout 60 "$FORGE_GODOT" --headless --path . --quit-after 120 2>&1 | tee "$SMOKE"
+          if grep -q "SCRIPT ERROR" "$SMOKE"; then
+            echo "::error::Hra se spustí, ale skript hlásí chybu – část scény se nevytvořila"
+            grep -n "SCRIPT ERROR" "$SMOKE" | head -5
+            exit 1
+          fi
+
+      - name: Vizuální kontrola (snímek hry vs mapa)
+        # Co testy nevidí: jestli se hra opravdu VYKRESLUJE podle mapy. Přesně
+        # tahle kontrola (jen lokálně) odhalila, že miniatura zakrývá obrazovku.
+        # Runner nemá GPU, takže se používá virtuální displej (xvfb) a softwarové
+        # OpenGL – ověřeno, že to funguje (20 snímků, shoda 89 %).
+        # Když se snímek nevyrenderuje (infrastruktura), krok se jen ohradí –
+        # blokovat sloučení kvůli chybějícímu softwarovému OpenGL nemá smysl.
+        # Když se ale snímek vyrenderuje a NESEDÍ s mapou, je to chyba hry.
+        timeout-minutes: 6
+        run: |
+          set -o pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb libgl1-mesa-dri libglx-mesa0 mesa-utils
+          mkdir -p /tmp/frames
+          xvfb-run -a "$FORGE_GODOT" --path . --rendering-driver opengl3 \
+            --resolution 480x270 --fixed-fps 20 \
+            --write-movie /tmp/frames/frame.png --quit-after 20 2>&1 | tail -5
+          SNIMEK=$(ls /tmp/frames/frame*.png 2>/dev/null | tail -1 || true)
+          echo "snímek: ${SNIMEK:-ZADNY}"
+          if [ -z "$SNIMEK" ]; then
+            echo "::warning::snímek se nevyrenderoval – softwarové OpenGL v runneru nefunguje"
+            exit 0
+          fi
+          python3 -m pip install --quiet pillow
+          python3 .forge/verify-level-render.py "$SNIMEK" assets/levels/main.json
+
+      - name: Vizuální kontrola – obsah snímku (vision)
+        # MĚŘENÍ vs POCHOPENÍ. Předchozí krok ověří, že snímek ODPOVÍDÁ mapě
+        # (shoda pixelů). Neověří ale, že je na něm vidět hráč, dlaždice a další
+        # obsah – tedy to, co hráč skutečně vidí. Na to je potřeba se podívat.
+        #
+        # NEBLOKUJE, a je to záměr: vision model má chybovost v jednotkách až
+        # desítkách procent. Dokud není naměřená na desítkách vzorků, nesmí
+        # zastavit slučování – falešný poplach je dražší chyba než přehlédnutí
+        # („ošklivý sprite projde" vs. „dobrý sprite se zablokuje a nikdo neví
+        # proč"). Proto `continue-on-error` a jen ::warning.
+        #
+        # Očekávaný obsah se POČÍTÁ z assets/levels/main.json, neopisuje se –
+        # jinak kontrola zestrne s první změnou mapy.
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY || vars.DEEPSEEK_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || vars.GEMINI_API_KEY }}
+        run: |
+          SNIMEK=$(ls /tmp/frames/frame*.png 2>/dev/null | tail -1 || true)
+          if [ -z "$SNIMEK" ]; then
+            echo "::warning::snímek není, vizuální kontrola přeskočena"; exit 0
+          fi
+          if [ -z "$DEEPSEEK_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then
+            echo "::notice::bez klíče pro vision se kontrola přeskakuje (není to chyba)"
+            exit 0
+          fi
+          node .forge/vision.mjs --mode presence "$SNIMEK" \
+            || echo "::warning::vizuální kontrola nedostupná (kvóta/klíč) – není to chyba hry"
+
+      - name: Export buildů (Linux + Web)
+        timeout-minutes: 10
+        run: |
+          mkdir -p build/linux build/web
+          "$FORGE_GODOT" --headless --path . --export-release "Linux" build/linux/game.x86_64
+          "$FORGE_GODOT" --headless --path . --export-release "Web" build/web/index.html
+          ls -la build/linux build/web
+
+      - name: Ulož build
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ github.sha }}
+          path: build/
+          retention-days: 14

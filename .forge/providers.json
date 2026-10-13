@@ -1,0 +1,121 @@
+{
+  "_popis": [
+    "Řetězec bezplatných poskytovatelů LLM pro běh v GitHub Actions.",
+    "Zkouší se popořadě; první, který odpoví, vyhrává. Klíče se berou z prostředí",
+    "(v Actions z GitHub Secrets nebo Variables).",
+    "",
+    "STAV OVĚŘEN 30. 9. 2026 (mění se to rychle – při divných chybách ověř znovu):",
+    "  mistral    – codestral-latest odpovídá, umí dobře diff. Nejspolehlivější.",
+    "  cerebras   – gpt-oss-120b. POZOR: trvalý free tier ZRUŠEN, jede z trial",
+    "               kreditu $5/30 dní (vyžaduje kartu). Až vyprší, vypadne – a je",
+    "               v strongModels, takže silné granule zůstanou na mistralu+groqu.",
+    "  gemini     – free tier, ale jen ~20 požadavků na model a den (naměřeno!).",
+    "               Proto `skromny: true` – zkouší se až na konci.",
+    "               POZOR: gemini-2.5-flash a gemini-2.0-flash vracely 404 („no longer",
+    "               available to new users“) – API samo doporučuje gemini-3.8-flash.",
+    "  groq       – free 30 RPM/1000 RPD, bez karty. Klíč v Secrets JE (v herních",
+    "               repech; dřívější poznámka „chybí“ je zastaralá). Ověřeno 30. 9.",
+    "               běhy #100–#102: pick-provider vybral groq a model odpověděl.",
+    "  openrouter – modely s příponou :free, 50 požadavků/den bez kreditů,",
+    "               free modely bývají rate-limited.",
+    "",
+    "Pořadí je záměrně takové, aby první byly ty s největší šancí odpovědět.",
+    "Uvnitř poskytovatele se zkouší modely popořadě – u kódovacích modelů je větší",
+    "šance, že dodrží formát úprav: aider s diff formátem u slabších modelů skončí",
+    "na „nochange“ (model navrhne patch, ale neaplikuje ho).",
+    "",
+    "SILNÉ MODELY (strongModels): granule roadmapy s `model: strong` (size_lines",
+    "> 60) smí zpracovat jen model z tohohle seznamu – workflow nastaví",
+    "FORGE_MIN_STRONG=strong a pick-provider vybírá jen z strongModels. Slabé",
+    "modely velkou granuli nikdy nedostanou, i kdyby fronta stála."
+  ],
+  "_limity": [
+    "STROPY POSKYTOVATELU (blok `limits` u poskytovatele) – jen NAMĚŘENÉ hodnoty.",
+    "Zdroj: repo/.forge/node/probe-provider.mjs, který čte hlavičky `x-ratelimit-*`",
+    "a tělo chyby 413/429 (poskytovatel sám napíše `Limit X, Requested Y`).",
+    "Co v bloku `limits` NENÍ, je NEMĚŘENÉ – a `request-budget.mjs` s tím počítá:",
+    "naměřený strop se VYNUCUJE (request se nepošle), odhad jen varuje.",
+    "Recept na nové měření: node .forge/node/probe-provider.mjs --jen <poskytovatel> --stdout",
+    "(klíč z prostředí nebo z .secrets/<nazev>_key.txt)."
+  ],
+  "providers": [
+    {
+      "name": "mistral",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "keyEnv": "MISTRAL_API_KEY",
+      "anyPriority": 10,
+      "_anyPriority": "Nejspolehlivější a nejštědřejší zdroj (naměřeno 30. 9.: 0 rate-limitů z 11 běhů). Pro granule `any` se zkouší první.",
+      "models": [
+        "codestral-latest"
+      ],
+      "strongModels": [
+        "codestral-latest"
+      ]
+    },
+    {
+      "name": "cerebras",
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "keyEnv": "CEREBRAS_API_KEY",
+      "anyPriority": 20,
+      "_anyPriority": "Štědrý, ale jede z trial kreditu ($5/30 dní) — pro `any` druhá volba, aby kredit vydržel.",
+      "models": [
+        "gpt-oss-120b"
+      ],
+      "strongModels": [
+        "gpt-oss-120b"
+      ]
+    },
+    {
+      "name": "gemini",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "keyEnv": "GEMINI_API_KEY",
+      "anyPriority": 90,
+      "skromny": true,
+      "_skromny": "Malý denní limit (~20 dotazů/den). Naměřeno v běhu #61: rotace poslala úlohu na gemini, ten vrátil 429 'exceeded your current quota' a celý pokus se spálil. Proto se skromní poskytovatelé zkouší až na konci.",
+      "_anyPriority": "Skromný zdroj — pro granule `any` až na konci.",
+      "models": [
+        "gemini-3.8-flash",
+        "gemini-3-flash-preview",
+        "gemini-flash-latest"
+      ]
+    },
+    {
+      "name": "groq",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "keyEnv": "GROQ_API_KEY",
+      "anyPriority": 30,
+      "_anyPriority": "Denní strop 200k tokenů a jeden běh spálí ~6k → ~33 běhů/den. Naměřeno 30. 9.: 6 z 6 běhů na rate-limitu. Pro `any` tedy až po mistralu a cerebrasu, ať kvóta zbyde na granule `strong`.",
+      "models": [
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b"
+      ],
+      "strongModels": [
+        "openai/gpt-oss-120b"
+      ],
+      "limits": {
+        "_mereno": "12. 10. 2026 živým dotazem: hlavička `x-ratelimit-limit-tokens` v odpovědi + tělo chyby 413 (`Limit 8000, Requested 10072`). Nástroj: repo/.forge/node/probe-provider.mjs.",
+        "_proc": "Bez tohohle bloku nemá pick-provider jak odmítnout úlohu, která se nevejde – naměřeno: requesty v CI měly 25 065 / 27 557 / 39 167 tokenů proti stropu 8 000.",
+        "tpm": 8000,
+        "requests_per_day": 1000,
+        "models": {
+          "openai/gpt-oss-120b": { "tpm": 8000, "requests_per_day": 1000 },
+          "openai/gpt-oss-20b": { "tpm": 8000, "requests_per_day": 1000 }
+        },
+        "_ucetnictvi": "Počítá se SKUTEČNÝ počet tokenů, ne rezervovaný výstup (ověřeno: max_tokens=1 → total 572, max_tokens=4096 → total 670; `remaining` spadlo o 648, ne o 4096)."
+      }
+    },
+    {
+      "name": "openrouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "keyEnv": "OPENROUTER_API_KEY",
+      "anyPriority": 90,
+      "_anyPriority": "Poslední záchrana pro granule `any`: 50 požadavků/den a každý probe zkouší až 4 modely, takže se vyčerpá rychle. Použije se, až když štědré zdroje selžou.",
+      "models": [
+        "poolside/laguna-s-2.1:free",
+        "cohere/north-mini-code:free",
+        "qwen/qwen3.8-27b:free",
+        "google/gemma-4-31b-it:free"
+      ]
+    }
+  ]
+}
