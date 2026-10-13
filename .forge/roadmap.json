@@ -62,7 +62,9 @@
       "konvence": [
         "01-typy",
         "05-godot3-konstanty"
-      ]
+      ],
+      "done": true,
+      "_done": "HOTOVO 13. 10. 2026: conductor vydal (task 248), beh Forge #248 prosel (37/37 testu), PR #2 automaticky sloucen. Cesta: prvni pokus na mistralu spadl na parse, druhy na groqu prosel."
     },
     {
       "id": "world.spawner",
@@ -84,7 +86,9 @@
       "konvence": [
         "01-typy",
         "05-godot3-konstanty"
-      ]
+      ],
+      "done": true,
+      "_done": "HOTOVO 13. 10. 2026: conductor vydal (task 249), pet pokusu nez uspel (empty() -> 05, := -> zadani, level v _init() -> zadani), beh Forge #9 prosel, PR #3 automaticky sloucen."
     },
     {
       "id": "core.wiring",
