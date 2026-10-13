@@ -25,6 +25,8 @@
     {
       "id": "world.coin",
       "title": "Mince, kterou hráč sebere",
+      "done": true,
+      "_done": "HOTOVO 13. 10. 2026 pilotem K4: běh agent.yml #2 (run 38393453056) → request 5 794 t (REQUEST_FITS), testy 33/33, PR #1 automaticky sloučen (496d366). Conductor tuhle granuli přeskočí (`done: true`); druhé kolo by jen opakovalo hotovou práci.",
       "kind": "code",
       "prompt": "Vytvoř ve souboru, který máš v chatu (je nový, prázdný), třídu mince. SMLOUVA – přesně tyhle členy volají testy: (1) `extends Area2D`, žádné `class_name`, `_init()` bez povinného argumentu; vlastnost `hodnota` deklaruj V TOMHLE skriptu (do holého `Area2D.new()` vlastnost přidat nejde). (2) V `_ready()` se přidej do skupiny `coin`, nastav `monitoring = true`, postav kolizní tvar (uzel CollisionShape2D s CircleShape2D, poloměr 6). (3) `var hodnota: int = 1`. (4) `hodnota_body() -> int` – vrátí `hodnota`. (5) `seber(hrac: Node) -> bool` – přičte hráči body přes `hrac.pridej_skore(hodnota)`, zavolá `queue_free()` a vrátí `true`; když už je sebraná, vrátí `false` a nic nemění. (6) `_on_body_entered(body) -> void` – když je `body` ve skupině `player`, zavolej `seber(body)`. DŮLEŽITÉ – SIGNÁL PŘIPOJUJ SYNTAXÍ GODOTU 4: `body_entered.connect(_on_body_entered)`. NIKDY `connect(\"body_entered\", self, \"_on_body_entered\")` – to je Godot 3, parse skriptu spadne (naměřeno 13. 10. 2026, běh #1 této hry). Vlastnosti nikdy nepojmenuj `position`, `name`, `scale` ani `visible`. Nic nemaž, soubor vzniká teď.",
       "owns": [
