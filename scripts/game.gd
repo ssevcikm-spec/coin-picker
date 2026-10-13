@@ -35,6 +35,23 @@ func _ready() -> void:
 	# projektu: soubor, který v repu NENÍ, se PŘESKOČÍ a hra zůstane hratelná
 	# (aditivní migrace) — proto `_vytvor_komponentu()` vrací null a nic nespadne.
 
+	# Přidej rozmisťovač mincí, pokud existuje
+	var spawner = _vytvor_komponentu("res://scripts/spawner.gd", "Spawner")
+	if spawner != null:
+		add_child(spawner)
+		if spawner.has_method("rozmistni"):
+			spawner.rozmistni(4)
+
+	# Přidej nepřítele, pokud existuje
+	var enemy = _vytvor_komponentu("res://scripts/enemy.gd", "Enemy")
+	if enemy != null:
+		add_child(enemy)
+		var exits = mapa.marker_positions("exit")
+		if exits.size() > 0:
+			enemy.position = exits[0]
+		else:
+			enemy.position = mapa.cell_center(mapa.spawn_cell.x, mapa.spawn_cell.y)
+
 
 func _vytvor_komponentu(cesta: String, jmeno: String) -> Node:
 	## Vytvoří uzel ze skriptu granule. Když soubor v repu není, vrátí `null`
