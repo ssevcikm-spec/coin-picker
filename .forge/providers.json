@@ -50,7 +50,19 @@
       ],
       "strongModels": [
         "codestral-latest"
-      ]
+      ],
+      "limits": {
+        "_mereno": "13. 10. 2026 živým dotazem s NOVÝM klíčem (starý byl regenerovaný): hlavička `x-ratelimit-limit-tokens-minute` = 625000 a `x-ratelimit-remaining-req-minute` = 122; velký test (80 000 znaků = 20 003 tokenů) prošel. Nástroj: repo/.forge/node/probe-provider.mjs --jen mistral.",
+        "_proc": "BEZ TOHOHLE BLOKU se strop HÁDAL (32 000) a granule se musely vejít do 8 000 kvůli Groqu — přitom Mistral má 78× větší strop. Naměřeno: `znaku_na_token` 3.99 (konstanta nástroje 3.03 zůstává konzervativní).",
+        "_neovereno": "Denní/měsíční kvóta NENÍ v hlavičkách — 625 000 je jen za MINUTU. Zdarma plán může mít měsíční strop; kdyby granule začaly padat na 429, je to tohle.",
+        "tpm": 625000,
+        "requests_per_minute": 120,
+        "models": {
+          "codestral-latest": {
+            "tpm": 625000
+          }
+        }
+      }
     },
     {
       "name": "cerebras",
@@ -63,7 +75,20 @@
       ],
       "strongModels": [
         "gpt-oss-120b"
-      ]
+      ],
+      "limits": {
+        "_mereno": "13. 10. 2026 živým dotazem s NOVÝM klíčem: hlavičky `x-ratelimit-limit-tokens-minute` = 30000, `-tokens-day` = 1000000, `-requests-day` = 2400, `-requests-hour` = 150, `-requests-minute` = 5; katalog modelů odpověděl a `gpt-oss-120b` v něm je. Nástroj: probe-provider.mjs --jen cerebras --bez-velkeho.",
+        "_proc": "Klíč FUNGUJE (dřívější poznámka „free tier zrušen, jede z trial“ platila pro starý stav — s novým klíčem limity přijdou v hlavičkách). Strop je 3,75× větší než Groq, ale denní strop 1 000 000 tokenů je BLÍZKO: jeden běh spálí ~6 000 t, takže ~160 běhů/den.",
+        "tpm": 30000,
+        "requests_per_day": 2400,
+        "tokens_per_day": 1000000,
+        "models": {
+          "gpt-oss-120b": {
+            "tpm": 30000,
+            "tokens_per_day": 1000000
+          }
+        }
+      }
     },
     {
       "name": "gemini",
