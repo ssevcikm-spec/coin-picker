@@ -109,7 +109,9 @@
       "model": "strong",
       "konvence": [
         "08-meze-a-overeni"
-      ]
+      ],
+      "done": true,
+      "_done": "HOTOVO 13. 10. 2026: conductor vydal (task 250) a dokoncil SAM - beh Forge #10, vsechny tri joby success, PR #4 automaticky sloucen. Cely plan 4 granul je hotovy."
     }
   ]
 }
