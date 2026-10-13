@@ -1,5 +1,5 @@
-extends Node
-## Mapa úrovně: mřížka znaků, průchodnost, značky.
+extends Node2D
+## Mapa úrovně: mřížka znaků, průchodnost, značky a VYKRESLENÍ dlaždic.
 ##
 ## SMLOUVA (volá ji hráč, rozmisťovač i testy):
 ##   nacti_mrizku(radky: Array) -> bool      · is_walkable_cell(cx, cy) -> bool
@@ -7,8 +7,10 @@ extends Node
 ##   marker_positions(druh: String) -> Array
 ##   spawn_cell: Vector2i · width: int · height: int · cell: int
 ##
-## Soubor je `extends Node` s `_init()` bez povinného argumentu — testy ho berou
-## přes `load(...).new()` (konvence §1g: jinak `new()` vrátí něco, co není uzel).
+## `_init()` není definován — `new()` se volá bez parametrů (konvence §1g).
+## `extends Node2D` (ne `Node`) proto, že mapa se KRESLÍ: kontrola
+## `.forge/verify-level-render.py` srovnává snímek hry s mapou po jednotlivých
+## buňkách a bez vykreslení hlásí 0/120 políček (naměřeno 12. 10. 2026).
 
 const CELL := 32
 ## Dlaždice 32x32. Stejné číslo je v `assets/spec.json` (tile.sirka) i v mapě
@@ -18,6 +20,11 @@ const CELL := 32
 const ZED := "#"
 const PODLAHA := "."
 const ZNACKY := { "spawn": "S", "exit": "E", "coin": "o" }
+const TILES_DIR := "res://assets/tiles/"
+const DLAZDICE_VYCHOZI := { "#": "stone", ".": "floor" }
+## Které dlaždici patří které pole mřížky. Bere se z mapy (`tiles`), aby se
+## jméno dlaždice neopisovalo na dvou místech — a když v datech chybí, platí
+## tenhle výchozí slovník.
 
 var mrizka: Array = []
 var width: int = 0
@@ -25,12 +32,48 @@ var height: int = 0
 var cell: int = CELL
 var spawn_cell: Vector2i = Vector2i(1, 1)
 var _znacky: Dictionary = {}
+var _nazvy_dlazdic: Dictionary = DLAZDICE_VYCHOZI.duplicate()
+var _textury: Dictionary = {}
 
 
 func _ready() -> void:
 	add_to_group("level")
+	_nacti_textury()
 	if mrizka.is_empty():
 		nacti_mrizku(vychozi_mrizka())
+	queue_redraw()
+
+
+func _nacti_textury() -> void:
+	## Načte obrázky dlaždic podle jmen v datech. Chybějící dlaždici NENÍ vada
+	## (kreslí se náhradní barvou) — ale musí to být vidět, proto `_draw()`.
+	_textury = {}
+	for nazev in _nazvy_dlazdic.values():
+		var cesta := TILES_DIR + String(nazev) + ".png"
+		if ResourceLoader.exists(cesta):
+			_textury[nazev] = load(cesta)
+
+
+func nazev_dlazdice(cx: int, cy: int) -> String:
+	if cx < 0 or cy < 0 or cx >= width or cy >= height:
+		return ""
+	return String(_nazvy_dlazdic.get(mrizka[cy].substr(cx, 1), ""))
+
+
+func _draw() -> void:
+	## Vykreslí mřížku dlaždicemi, které odpovídají jménům v mapě.
+	for y in range(height):
+		for x in range(width):
+			var nazev := nazev_dlazdice(x, y)
+			var cil := Rect2(Vector2(float(x * cell), float(y * cell)),
+				Vector2(float(cell), float(cell)))
+			var textura: Texture2D = _textury.get(nazev)
+			if textura != null:
+				draw_texture_rect(textura, cil, false)
+			elif nazev == "stone":
+				draw_rect(cil, Color(0.27, 0.29, 0.33))
+			else:
+				draw_rect(cil, Color(0.49, 0.45, 0.38))
 
 
 func vychozi_mrizka() -> Array:
@@ -131,6 +174,9 @@ func nacti_z_dat(data: Variant) -> bool:
 		push_error("mapa není objekt")
 		return false
 	cell = int(data.get("cell", 32))
+	if data.has("tiles") and typeof(data["tiles"]) == TYPE_DICTIONARY:
+		_nazvy_dlazdic = data["tiles"].duplicate()
+		_nacti_textury()
 	var radky: Array = data.get("grid", [])
 	if not nacti_mrizku(radky):
 		return false

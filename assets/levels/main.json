@@ -19,12 +19,12 @@
     0
   ],
   "legend": {
-    "0": "wall",
-    "1": "floor"
+    "#": "wall",
+    ".": "floor"
   },
   "tiles": {
-    "0": "stone",
-    "1": "floor"
+    "#": "stone",
+    ".": "floor"
   },
   "grid": [
     "###############",

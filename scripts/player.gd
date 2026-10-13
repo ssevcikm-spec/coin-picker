@@ -27,6 +27,23 @@ var rychlost: float = 120.0
 func _ready() -> void:
 	add_to_group("player")
 	_priprav_kolizi()
+	_priprav_vzhled()
+
+
+func _priprav_vzhled() -> void:
+	## Hráč musí být VIDĚT — kdyby na scéně nebyl, testy, běh i brány projdou,
+	## ale člověk (a vizuální kontrola) uvidí prázdno. Naměřeno 12. 10. 2026:
+	## `verify-level-render.py` hlásil „Terén sedí 0/120“, protože hra
+	## nevykreslovala nic.
+	if get_node_or_null("Vzhled") != null:
+		return
+	var cesta := "res://assets/sprites/player.png"
+	if not ResourceLoader.exists(cesta):
+		return
+	var obraz := Sprite2D.new()
+	obraz.name = "Vzhled"
+	obraz.texture = load(cesta)
+	add_child(obraz)
 
 
 func _priprav_kolizi() -> void:

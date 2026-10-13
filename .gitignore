@@ -27,3 +27,6 @@ agent.patch
 agent.log
 smoke.log
 .aider*
+
+# Lokální snímky pro overení vykreslování (verify-level-render.py)
+.tmp-frames/

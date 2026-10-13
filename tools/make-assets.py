@@ -113,8 +113,8 @@ def zapis_mapu() -> None:
         "height": HEIGHT,
         "viewport": VIEWPORT,
         "offset": [0, 0],
-        "legend": {"0": "wall", "1": "floor"},
-        "tiles": {"0": "stone", "1": "floor"},
+        "legend": {"#": "wall", ".": "floor"},
+        "tiles": {"#": "stone", ".": "floor"},
         "grid": mrizka,
         "markers": MARKERY,
         "stats": _statistiky(mrizka),
@@ -159,6 +159,29 @@ def zapis_minci() -> None:
     print(f"  {cesta.relative_to(REPO)}: {img.size[0]}x{img.size[1]}, silueta {_vyska(img)} px")
 
 
+def zapis_dlazdice() -> None:
+    """Dlaždice 32x32 — JEDNA barva musí v obrázku převládat.
+
+    PROČ: `.forge/verify-level-render.py` si z každé dlaždice odvodí paletu
+    (8 nejčastějších barev) a snímek hry srovnává po BUŇKÁCH podle barvy
+    ve středu políčka. Kdyby dlaždice byla šum, paleta by byla náhodná a
+    kontrola by hlásila vadu i na správně vykreslené mapě.
+    """
+    tvary = {
+        "stone": ((70, 74, 84), (52, 56, 64)),    # zeď: tmavší, chladná
+        "floor": ((126, 116, 96), (108, 99, 82)),  # podlaha: světlejší, teplá
+    }
+    for jmeno, (zaklad, linka) in tvary.items():
+        img = Image.new("RGBA", (CELL, CELL), zaklad + (255,))
+        d = ImageDraw.Draw(img)
+        # Jen jemná spára po okraji (1 px) — plocha zůstává jednolitá.
+        d.rectangle([0, 0, CELL - 1, CELL - 1], outline=linka + (255,))
+        cesta = REPO / "assets" / "tiles" / f"{jmeno}.png"
+        cesta.parent.mkdir(parents=True, exist_ok=True)
+        img.save(cesta)
+        print(f"  {cesta.relative_to(REPO)}: {CELL}x{CELL}, základ {zaklad}")
+
+
 def _vyska(img: Image.Image) -> int:
     bb = img.getbbox()
     return (bb[3] - bb[1]) if bb else 0
@@ -185,6 +208,7 @@ def _zkontroluj(img: Image.Image, jmeno: str, cil: int) -> None:
 if __name__ == "__main__":
     print("Generuji assety Coin-Pickeru:")
     zapis_mapu()
+    zapis_dlazdice()
     zapis_hrace()
     zapis_minci()
     print("Hotovo.")
