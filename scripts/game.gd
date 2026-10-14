@@ -52,6 +52,8 @@ func _ready() -> void:
 		else:
 			enemy.position = mapa.cell_center(mapa.spawn_cell.x, mapa.spawn_cell.y)
 
+	_zapoj_nove_komponenty()
+
 
 func _vytvor_komponentu(cesta: String, jmeno: String) -> Node:
 	## Vytvoří uzel ze skriptu granule. Když soubor v repu není, vrátí `null`
@@ -104,6 +106,41 @@ func _on_sebrano(body: int) -> void:
 	skore += body
 	_aktualizuj_listu()
 
+
+func _zapoj_nove_komponenty() -> void:
+	var progress = _vytvor_komponentu("res://scripts/progress.gd", "Progress")
+	if progress != null:
+		add_child(progress)
+
+	var timer = _vytvor_komponentu("res://scripts/timer.gd", "Timer")
+	if timer != null:
+		add_child(timer)
+
+	var patrol = _vytvor_komponentu("res://scripts/patrol.gd", "Patrol")
+	if patrol != null:
+		add_child(patrol)
+
+	var portal = _vytvor_komponentu("res://scripts/portal.gd", "Portal")
+	if portal != null:
+		add_child(portal)
+		var exits = mapa.marker_positions("exit")
+		if exits.size() > 0:
+			portal.position = exits[0]
+		else:
+			portal.position = mapa.cell_center(mapa.spawn_cell.x, mapa.spawn_cell.y)
+
+	var door = _vytvor_komponentu("res://scripts/door.gd", "Door")
+	if door != null:
+		add_child(door)
+		var exits = mapa.marker_positions("exit")
+		if exits.size() > 0:
+			door.position = exits[0]
+		else:
+			door.position = mapa.cell_center(mapa.spawn_cell.x, mapa.spawn_cell.y)
+
+	var heart = _vytvor_komponentu("res://scripts/heart.gd", "Heart")
+	if heart != null:
+		add_child(heart)
 
 func _aktualizuj_listu() -> void:
 	if lista != null and lista.has_method("nastav_skore"):
