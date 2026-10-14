@@ -258,13 +258,40 @@ jobs:
             echo "::warning::granule nedeklaruje konvence a v repu není CONVENTIONS.md – agent dostane jen zadání"
           fi
 
-          # Rozpočet se ptá PŘED voláním: nevejde-li se, běh skončí pojmenovaně
-          # a nespálí pokus ani kvótu. `TRIDA` jde do prostředí pro report.
-          if ! node .forge/node/request-budget.mjs \
-                 --zadani-text "$ZADANI" --soubory "$DO_EDITACE" --cteni "$CIT_DEPS" \
-                 --konvence "$KONVENCE" \
-                 --poskytovatel "$FORGE_PROVIDER" --model "$FORGE_MODEL"; then
-            echo "REQUEST_TOO_LARGE: rozpocet requestu prevysil strop poskytovatele" >> agent.log
+          # Rozpočet se ptá PŘED voláním. Když se request nevejde do VYBRANÉHO
+          # poskytovatele, zkusí se DALŠÍ v řetězci (P42, 14. 10. 2026).
+          #
+          # PROČ TO TU JE: dřív tu byl `exit 1` a pokus se spálil, i když
+          # v řetězci byl zdroj, který granuli vezme. Naměřeno na `sim.progress`
+          # (request 9 016 t): třikrát ho pick-provider poslal na groq
+          # (strop 8 000 t) a třikrát to byl spálený pokus — přitom mistral
+          # (625 000 t) i cerebras ho vezmou. `exit 1` proto zůstává jen pro
+          # případ, kdy se request nevejde do ŽÁDNÉHO poskytovatele v řetězci:
+          # to je vada granule (moc velký kontext), ne náhoda volby zdroje.
+          rozpocet_sedi() {
+            node .forge/node/request-budget.mjs \
+              --zadani-text "$ZADANI" --soubory "$DO_EDITACE" --cteni "$CIT_DEPS" \
+              --konvence "$KONVENCE" \
+              --poskytovatel "$FORGE_PROVIDER" --model "$FORGE_MODEL"
+          }
+          rozpocet_ok=0
+          if rozpocet_sedi; then rozpocet_ok=1; fi
+          if [ "$rozpocet_ok" = "0" ]; then
+            # Stejný vzor jako u rotace po neúspěšném běhu níž (`--next` +
+            # `nacti_poskytovatele` + znovu rozpočet). Strop je 4 poskytovatelé,
+            # aby se řetězec nemohl zacyklit.
+            for _pokus_rozpoctu in 1 2 3 4; do
+              if ! node .forge/pick-provider.mjs --next; then break; fi
+              nacti_poskytovatele
+              if rozpocet_sedi; then
+                echo "::notice::request se nevešel do předchozího poskytovatele – použiji $FORGE_PROVIDER/$FORGE_MODEL"
+                rozpocet_ok=1
+                break
+              fi
+            done
+          fi
+          if [ "$rozpocet_ok" = "0" ]; then
+            echo "REQUEST_TOO_LARGE: request se nevejde ani do jednoho poskytovatele v řetězci" >> agent.log
             echo "TRIDA=REQUEST_TOO_LARGE" >> "$GITHUB_ENV"
             exit 1
           fi

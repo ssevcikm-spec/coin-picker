@@ -181,5 +181,43 @@ rmSync(FIX_PRILIS_VELKA, { force: true });
 rmSync(FIX_BEZ_KONVENCI, { force: true });
 rmSync(FIX_SPATNA_SEKCE, { force: true });
 
+// ── P42 (14. 10. 2026): ROZPOČET SE MÁ USTOUPIT DALŠÍMU POSKYTOVATELI ───────
+// NAMĚŘENO: `sim.progress` má request 9 105 t; na groqu (strop 8 000 t) spadla
+// předběžná kontrola rozpočtu `exit 1` a pokus se spálil — třikrát. Přitom
+// mistral (625 000 t) i cerebras (35 000 t) ten request vezmou (měřeno
+// `rozpocet-granuli.mjs`: 14/14 REQUEST_FITS). Předběžná kontrola proto rotuje
+// na dalšího poskytovatele a `exit 1` zůstává jen pro „nevejde se NIKAM“.
+//
+// Kontrola je TEXTová (YAML parser v node není) a je záměrně vázaná na POŘADÍ
+// značek PŘED prvním `TRIDA=REQUEST_TOO_LARGE`: v témže kroku je i rotace po
+// neúspěšném běhu, takže pouhá přítomnost `--next` v souboru nic nedokazuje.
+// Proto má i KALIBRAČNÍ případ (starý text bez rotace musí vyjít jako VADNÝ).
+const wf = readFileSync(join(REPO, '.github', 'workflows', 'agent.yml'), 'utf8');
+function predbeznaRotace(text) {
+  const iTrida = text.indexOf('TRIDA=REQUEST_TOO_LARGE');
+  const iNext = text.indexOf('pick-provider.mjs --next');
+  const iSmycka = text.indexOf('_pokus_rozpoctu');
+  const iNacti = iNext >= 0 ? text.indexOf('nacti_poskytovatele', iNext) : -1;
+  return {
+    maTridu: iTrida >= 0,
+    rotacePredTridou: iNext >= 0 && iNext < iTrida,
+    smyckaPredTridou: iSmycka >= 0 && iSmycka < iTrida,
+    nacteniPredTridou: iNacti >= 0 && iNacti < iTrida,
+  };
+}
+const rot = predbeznaRotace(wf);
+test('P42: předběžný rozpočet má rotaci na dalšího poskytovatele (--next)',
+  rot.maTridu && rot.rotacePredTridou, true);
+test('P42: rotace je ve smyčce (ne jeden pokus)',
+  rot.smyckaPredTridou, true);
+test('P42: po rotaci se poskytovatel načte (nacti_poskytovatele)',
+  rot.nacteniPredTridou, true);
+// KALIBRACE: starý text (rozpočet → TRIDA → exit 1, bez rotace) musí být VADNÝ.
+// Kdyby tenhle případ prošel, kontrola by neměla jak selhat (vada S27).
+const staryRozpocet = 'if ! node .forge/node/request-budget.mjs --poskytovatel x; then\n'
+  + '  echo "TRIDA=REQUEST_TOO_LARGE" >> "$GITHUB_ENV"\n  exit 1\nfi';
+test('P42 KALIBRACE: text bez rotace je vyhodnocen jako vadný',
+  predbeznaRotace(staryRozpocet).rotacePredTridou, false);
+
 console.log(`\n=== VYSLEDEK: ${kontroly - chyb}/${kontroly} kontrol, ${chyb} chyb ===`);
 process.exit(chyb ? 1 : 0);
